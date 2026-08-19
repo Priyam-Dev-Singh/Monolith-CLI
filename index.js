@@ -15,9 +15,8 @@ program
   .version('1.0.0');
 
 program
-  .command('env set')
+  .command('env:set <keyValue>')
   .description('Set an environment variable (e.g., monolith env set API_KEY=123)')
-  .argument('<keyValue>', 'MY_TEST_KEY')
   .action(async (keyValue) => {
     const configPath = path.join(process.cwd(), '.monolith', 'project.json');
     if (!fs.existsSync(configPath)) return console.error("❌ Run 'monolith init' first.");
@@ -34,27 +33,43 @@ program
       console.log(`✅ ${response.data.message}`);
     } catch (error) {
       console.error("❌ Failed to secure variable:", error.message);
+      console.log('\n\x1b[33m💡 Need help? Run `monolith guide` to view the platform architecture.\x1b[0m');
     }
   });
 
 program
-  .command('db create')
+  .command('db:create <dbName>')
   .description('Provision a new Postgres database (e.g., monolith db create study_db)')
-  .argument('<dbName>', 'Name of the database created')
   .action(async (dbName) => {
-    console.log(`Forging database '${dbName}' on the server...`);
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const askQuestion = (query) => new Promise((resolve) => rl.question(query, resolve));
+
+    console.log(`\n⬛ DATABASE ENGINE SELECTION`);
+    console.log(`1. PostgreSQL (Default)`);
+    console.log(`2. MySQL`);
+    console.log(`3. Redis`);
+    console.log(`4. MongoDB`);
+    
+    let choice = await askQuestion('\nSelect engine (1-4, press Enter for 1): ');
+    rl.close();
+
+    const engines = { '1': 'postgres', '2': 'mysql', '3': 'redis', '4': 'mongodb' };
+    const dbType = engines[choice.trim()] || 'postgres';
+
+    console.log(`\nForging ${dbType.toUpperCase()} database '${dbName}' on the server...`);
     try {
       const response = await axios.post(`${PLATFORM_URL}/api/db`, {
-        dbName: dbName
+        dbName: dbName,
+        dbType: dbType // Passing the requested engine to the server
       });
       
       console.log(`✅ ${response.data.message}`);
       console.log(`\nDATABASE_URL:`);
-      console.log(`\x1b[32m${response.data.databaseUrl}\x1b[0m\n`); // Prints in green
+      console.log(`\x1b[32m${response.data.databaseUrl}\x1b[0m\n`); 
       console.log(`Copy this URL and use 'monolith env set DATABASE_URL=' to link it to your app.`);
-      
     } catch (error) {
-      console.error("❌ Failed to create database:", error.response?.data?.error || error.message);
+      console.error("\n❌ Failed to create database:", error.response?.data?.error || error.message);
+      console.log('\n\x1b[33m💡 Need help? Run `monolith guide` to view the platform architecture.\x1b[0m');
     }
   });
 
@@ -63,6 +78,22 @@ program
   .description('Initialize a new Monolith project in the current directory')
   .argument('<projectName>', 'name of the project')
   .action(async (projectName) => {
+    const configDir = path.join(process.cwd(), '.monolith');
+    const configFile = path.join(configDir, 'project.json');
+    if (fs.existsSync(configFile)) {
+      const existingConfig = JSON.parse(fs.readFileSync(configFile));
+      console.log(`\n⚠️  Project '\x1b[1m${existingConfig.name}\x1b[0m' is already initialized here.`);
+      
+      if (existingConfig.githubConnected) {
+        console.log(`✅ CI/CD is active. Just run 'git push' to deploy.`);
+      } else {
+        console.log(`🚀 Next steps:`);
+        console.log(`   - Run 'monolith deploy' for manual deployment.`);
+        console.log(`   - Run 'monolith github connect' to automate CI/CD.`);
+      }
+      console.log(`\x1b[33m💡 Need help? Run \`monolith guide\` to view the platform architecture.\x1b[0m\n`);
+      process.exit(0);
+    }
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const askQuestion = (query) => new Promise((resolve) => rl.question(query, resolve));
 
@@ -83,8 +114,8 @@ program
     }
 
     // 2. Only generate files if validation passed
-    const configDir = path.join(process.cwd(), '.monolith');
-    const configFile = path.join(configDir, 'project.json');
+
+
 
     if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
 
@@ -140,17 +171,21 @@ program
             currentPostInstall.push(config.command);
             modified = true;
 
-            // Dynamically fix the Docker caching layer if the tool needs a local folder
+            
+             // Dynamically fix the Docker caching layer if the tool needs a local folder
             if (config.requiredFolder) {
               const tomlPath = path.join(targetPackageDir, 'nixpacks.toml');
               if (!fs.existsSync(tomlPath)) {
                 console.log(`   ⚙️  Auto-generating nixpacks.toml to optimize ${config.name} build caching...`);
-                fs.writeFileSync(
-                  tomlPath, 
-                  `[phases.install]\nonlyIncludeFiles = ['...', '${config.requiredFolder}']\n`
-                );
+                
+                const nixpacksContent = `[phases.install]
+cmds = ['npm install']
+onlyIncludeFiles = ['package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', '${config.requiredFolder}']
+`;
+                fs.writeFileSync(tomlPath, nixpacksContent);
               }
             }
+          
           }
         }
       }
@@ -220,6 +255,7 @@ program
   } catch (error) {
     console.error(`\n❌ TRANSPORT FAILED`);
     console.error(error.response ? error.response.data : error.message);
+    console.log('\n\x1b[33m💡 Need help? Run `monolith guide` to view the platform architecture.\x1b[0m');
   }finally {
         if (fs.existsSync(outputPath)) {
           fs.unlinkSync(outputPath);
@@ -245,7 +281,7 @@ program
   });
 
 program
-  .command('github connect')
+  .command('github:connect')
   .description('Automatically configure GitHub CI/CD webhooks for your repository')
   .action(async () => {
     const configPath = path.join(process.cwd(), '.monolith', 'project.json');
@@ -304,6 +340,10 @@ program
 
       console.log(`\n✅ CI/CD PIPELINE ESTABLISHED!`);
       console.log(`   Webhook injected successfully. Every 'git push' will now trigger an automatic deployment.`);
+      console.log(`📜 To see logs after each git push run 'monolith logs'\n`);
+      // Save the state so 'init' knows it's connected
+      projectConfig.githubConnected = true;
+      fs.writeFileSync(configPath, JSON.stringify(projectConfig, null, 2));
     } catch (error) {
       console.error(`\n❌ Failed to connect GitHub CI/CD:`);
       console.error(error.response?.data?.message || error.message);
@@ -346,6 +386,27 @@ program
     console.log(`  \x1b[90mOption B (Auto):\x1b[0m   Run \x1b[36mmonolith github connect\x1b[0m to deploy on every 'git push'.\n`);
     
     console.log(`\x1b[1mYour PaaS is live and awaiting commands.\x1b[0m\n`);
+  });
+
+program
+  .command('logs')
+  .description('View the latest deployment logs for your project')
+  .action(async () => {
+    const configPath = path.join(process.cwd(), '.monolith', 'project.json');
+    if (!fs.existsSync(configPath)) {
+      console.error("❌ No project found. Run 'monolith init ' first.");
+      return;
+    }
+    const projectId = JSON.parse(fs.readFileSync(configPath)).id;
+
+    try {
+      console.log(`\n📡 Fetching deployment logs for ${projectId}...\n`);
+      const response = await axios.get(`${PLATFORM_URL}/api/logs?projectId=${projectId}`);
+      console.log(response.data.logs);
+    } catch (error) {
+      console.error("❌ Failed to fetch logs:", error.response?.data?.error || error.message);
+      console.log('\n\x1b[33m💡 Need help? Run `monolith guide` for troubleshooting.\x1b[0m');
+    }
   });
 
 program.parse(process.argv);
