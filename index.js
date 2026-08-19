@@ -41,6 +41,10 @@ program
   .command('db:create <dbName>')
   .description('Provision a new Postgres database (e.g., monolith db create study_db)')
   .action(async (dbName) => {
+    const configPath = path.join(process.cwd(), '.monolith', 'project.json');
+    if (!fs.existsSync(configPath)) return console.error("❌ Run 'monolith init' first.");
+    const projectId = JSON.parse(fs.readFileSync(configPath)).id;
+
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const askQuestion = (query) => new Promise((resolve) => rl.question(query, resolve));
 
@@ -58,21 +62,27 @@ program
 
     console.log(`\nForging ${dbType.toUpperCase()} database '${dbName}' on the server...`);
     try {
-      const response = await axios.post(`${PLATFORM_URL}/api/db`, {
-        dbName: dbName,
-        dbType: dbType // Passing the requested engine to the server
-      });
+      const response = await axios.post(`${PLATFORM_URL}/api/db`, { dbName, dbType });
+      const dbUrl = response.data.databaseUrl;
       
       console.log(`✅ ${response.data.message}`);
-      console.log(`\nDATABASE_URL:`);
-      console.log(`\x1b[32m${response.data.databaseUrl}\x1b[0m\n`); 
-      console.log(`Copy this URL and use 'monolith env:set DATABASE_URL=' to link it to your app.`);
+      
+      // --- NEW: AUTO-LINKING ENGINE ---
+      const envKey = dbType === 'redis' ? 'REDIS_URL' : (dbType === 'mongodb' ? 'MONGO_URI' : 'DATABASE_URL');
+      console.log(`🔗 Auto-linking to the server vault as \x1b[36m${envKey}\x1b[0m...`);
+      
+      await axios.post(`${PLATFORM_URL}/api/env`, {
+        projectId: projectId,
+        envs: { [envKey]: dbUrl }
+      });
+
+      console.log(`✅ Database linked successfully!`);
     } catch (error) {
       console.error("\n❌ Failed to create database:", error.response?.data?.error || error.message);
       console.log('\n\x1b[33m💡 Need help? Run `monolith guide` to view the platform architecture.\x1b[0m');
     }
   });
-
+  
 program
   .command('init')
   .description('Initialize a new Monolith project in the current directory')
