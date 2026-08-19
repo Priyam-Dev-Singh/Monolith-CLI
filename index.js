@@ -38,6 +38,8 @@ program
   .command('env:set <keyValue>')
   .description('Set an environment variable (e.g., monolith env set API_KEY=123)')
   .action(async (keyValue) => {
+
+    
     const configPath = path.join(process.cwd(), '.monolith', 'project.json');
     if (!fs.existsSync(configPath)) return console.error("❌ Run 'monolith init' first.");
     
@@ -253,76 +255,54 @@ program
   .command('deploy')
   .description('Pack and deploy the current directory to the Monolith server')
   .action(() => {
-    console.log("\n⬛ MONOLITH DEPLOYMENT INITIATED");
-    console.log("Packing local directory...");
+    const configDir = path.join(process.cwd(), '.monolith');
+    const configFile = path.join(configDir, 'project.json');
 
-    const outputFileName = 'monolith-build.zip';
-    const outputPath = path.join(process.cwd(), outputFileName);
-    const output = fs.createWriteStream(outputPath);
-    
-    // Initialize the compression engine
-    const archive = new ZipArchive({
-      zlib: { level: 9 } // Maximum tactical compression
-    });
+    if (!fs.existsSync(configFile)) {
+      console.error("\n❌ Not a Monolith project. Run 'monolith init' first.");
+      process.exit(1);
+    }
 
-    // Listen for when the zipping is completely finished
+    const config = JSON.parse(fs.readFileSync(configFile));
+    console.log('\n⬛ MONOLITH DEPLOYMENT INITIATED');
+    console.log('Packing local directory (excluding node_modules & .git)...');
+
+    const zipPath = path.join(process.cwd(), `${config.id}.zip`);
+    const output = fs.createWriteStream(zipPath);
+    const archive = new ZipArchive({zlib:{level:9}}); // Max compression
+
     output.on('close', async () => {
-  const sizeMB = (archive.pointer() / 1024 / 1024).toFixed(2);
-  console.log(`[ SUCCESS ] Payload secured: ${outputFileName} (${sizeMB} MB)`);
-  console.log("Initiating server transport...");
+      console.log(`📦 Packed ${archive.pointer()} total bytes.`);
+      console.log('🚀 Uploading payload to Azure Server...');
+      
+      const form = new FormData();
+      form.append('projectId', config.id);
+      form.append('payload', fs.createReadStream(zipPath));
 
- try {
-    // Read the project ID
-    const configPath = path.join(process.cwd(), '.monolith', 'project.json');
-    if (!fs.existsSync(configPath)) {
-      console.error("❌ No project found. Run 'monolith init ' first.");
-      process.exit(1);
-    }
-    const projectConfig = JSON.parse(fs.readFileSync(configPath));
-
-    const form = new FormData();
-    form.append('payload', fs.createReadStream(outputPath));
-    // Attach the ID to the transport
-    form.append('projectId', projectConfig.id); 
-
-    const response = await axios.post(`${PLATFORM_URL}/api/deploy`, form, {
-      headers: { ...form.getHeaders() }
+      try {
+        const res = await axios.post(`${PLATFORM_URL}/api/deploy`, form, {
+          headers: { ...form.getHeaders() }
+        });
+        console.log('\n' + res.data.message);
+      } catch (err) {
+        console.error('\n❌ Deployment failed:', err.response?.data?.error || err.message);
+      } finally {
+        // Always clean up the local zip file
+        if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath); 
+      }
     });
 
-    console.log(`\n✅ DEPLOYMENT SUCCESSFUL`);
-    console.log(`Server Response: ${response.data.message}`);
-    
-    // Clean up the local zip file so we don't leave trash on the user's computer
-    fs.unlinkSync(outputPath);
-
-  } catch (error) {
-    console.error(`\n❌ TRANSPORT FAILED`);
-    console.error(error.response ? error.response.data : error.message);
-    console.log('\n\x1b[33m💡 Need help? Run `monolith guide` to view the platform architecture.\x1b[0m');
-  }finally {
-        if (fs.existsSync(outputPath)) {
-          fs.unlinkSync(outputPath);
-        }
-    }
-});
-
-    // Handle any catastrophic errors during compression
-    archive.on('error', (err) => {
-      console.error("[ ERROR ] Failed to pack code:", err);
-      process.exit(1);
-    });
-
+    archive.on('error', (err) => { throw err; });
     archive.pipe(output);
-
-    // Grab everything in the folder, but ruthlessly ignore heavy cache directories
+    
+    // --- THE FIX: Intelligent Ignoring ---
     archive.glob('**/*', {
       cwd: process.cwd(),
-      ignore: ['node_modules/**', '.git/**', '.expo/**','.monolith/**','dist/**','.env', outputFileName]
+      ignore: ['node_modules/**', '.git/**', '.env', '*.zip', '.monolith/**']
     });
-
+    
     archive.finalize();
   });
-
 program
   .command('github:connect')
   .description('Automatically configure GitHub CI/CD webhooks for your repository')
