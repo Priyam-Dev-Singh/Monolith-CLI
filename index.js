@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-require('dotenv').config();
+require('dotenv').config({ path: __dirname + '/.env' });
 const PLATFORM_URL = 'http://20.2.198.46:4000';
 const axios = require('axios');
 const FormData = require('form-data');
@@ -370,7 +370,7 @@ program
           config: {
             url: webhookUrl,
             content_type: 'json',
-            insecure_ssl: '0'
+            secret: process.env.GITHUB_WEBHOOK_SECRET
           }
         },
         {
