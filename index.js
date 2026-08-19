@@ -190,7 +190,7 @@ program
                 
                 const nixpacksContent = `[phases.install]
 cmds = ['npm install']
-onlyIncludeFiles = ['package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', '${config.requiredFolder}']
+onlyIncludeFiles = ['...', '${config.requiredFolder}']
 `;
                 fs.writeFileSync(tomlPath, nixpacksContent);
               }
