@@ -63,6 +63,26 @@ program
   .description('Initialize a new Monolith project in the current directory')
   .argument('<projectName>', 'name of the project')
   .action(async (projectName) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const askQuestion = (query) => new Promise((resolve) => rl.question(query, resolve));
+
+    // 1. Ask & Validate FIRST
+    let buildDir = await askQuestion('📂 Enter your build directory (e.g., backend, api) or press Enter for root: ');
+    buildDir = buildDir.trim();
+
+    let targetPackageDir = process.cwd();
+
+    if (buildDir !== '') {
+      const checkPath = path.join(process.cwd(), buildDir);
+      if (!fs.existsSync(checkPath)) {
+        console.log(`\n❌ Directory '${buildDir}' not found. Initialization aborted.`);
+        rl.close();
+        process.exit(1); // Halt immediately
+      }
+      targetPackageDir = checkPath;
+    }
+
+    // 2. Only generate files if validation passed
     const configDir = path.join(process.cwd(), '.monolith');
     const configFile = path.join(configDir, 'project.json');
 
@@ -72,43 +92,41 @@ program
     const config = { name: projectName, id: projectId };
 
     fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
-    console.log(`✅ Project initialized: ${projectName} (${projectId})\n`);
-
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const askQuestion = (query) => new Promise((resolve) => rl.question(query, resolve));
-
-    // 1. Interactive Directory Routing
-    let buildDir = await askQuestion('📂 Enter your build directory (e.g., backend, api) or press Enter for root: ');
-    buildDir = buildDir.trim();
-
-    let targetPackageDir = process.cwd();
+    console.log(`\n✅ Project initialized: ${projectName} (${projectId})`);
 
     if (buildDir !== '') {
-      const checkPath = path.join(process.cwd(), buildDir);
-      if (fs.existsSync(checkPath)) {
-        console.log(`\n📦 Generating monolith.json pointing to /${buildDir}...`);
-        fs.writeFileSync(
-          path.join(process.cwd(), 'monolith.json'), 
-          JSON.stringify({ buildDirectory: buildDir }, null, 2)
-        );
-        targetPackageDir = checkPath;
-      } else {
-        console.log(`\n⚠️  Directory '${buildDir}' not found. Defaulting to root.`);
-      }
+      console.log(`📦 Generating monolith.json pointing to /${buildDir}...`);
+      fs.writeFileSync(
+        path.join(process.cwd(), 'monolith.json'), 
+        JSON.stringify({ buildDirectory: buildDir }, null, 2)
+      );
     } else {
-      console.log(`\n📦 Using root directory for deployment.`);
+      console.log(`📦 Using root directory for deployment.`);
     }
 
-    // 2. Edge-Case Tool Registry & Interactive Fallback
+    // 3. Edge-Case Tool Registry & Interactive Fallback
     const packageJsonPath = path.join(targetPackageDir, 'package.json');
     if (fs.existsSync(packageJsonPath)) {
       const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
       const allDeps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
       
-      // Add known edge-cases here as your platform grows
+     // The Upgraded Registry: Now tracks if a tool needs specific folders during install
       const KNOWN_TOOLS = {
-        '@prisma/client': { name: 'Prisma ORM', command: 'npx prisma generate' },
-        'puppeteer': { name: 'Puppeteer', command: 'npx puppeteer browsers install' }
+        '@prisma/client': { 
+          name: 'Prisma ORM', 
+          command: 'npx prisma generate',
+          requiredFolder: 'prisma/' 
+        },
+        'patch-package': { 
+          name: 'Patch Package', 
+          command: 'patch-package',
+          requiredFolder: 'patches/' 
+        },
+        'puppeteer': { 
+          name: 'Puppeteer', 
+          command: 'npx puppeteer browsers install',
+          requiredFolder: null // Needs internet, not local files
+        }
       };
 
       pkg.scripts = pkg.scripts || {};
@@ -121,6 +139,18 @@ program
           if (answer.toLowerCase() !== 'n') {
             currentPostInstall.push(config.command);
             modified = true;
+
+            // Dynamically fix the Docker caching layer if the tool needs a local folder
+            if (config.requiredFolder) {
+              const tomlPath = path.join(targetPackageDir, 'nixpacks.toml');
+              if (!fs.existsSync(tomlPath)) {
+                console.log(`   ⚙️  Auto-generating nixpacks.toml to optimize ${config.name} build caching...`);
+                fs.writeFileSync(
+                  tomlPath, 
+                  `[phases.install]\nonlyIncludeFiles = ['...', '${config.requiredFolder}']\n`
+                );
+              }
+            }
           }
         }
       }
@@ -212,6 +242,110 @@ program
     });
 
     archive.finalize();
+  });
+
+program
+  .command('github connect')
+  .description('Automatically configure GitHub CI/CD webhooks for your repository')
+  .action(async () => {
+    const configPath = path.join(process.cwd(), '.monolith', 'project.json');
+    if (!fs.existsSync(configPath)) {
+      console.error("❌ No project found. Run 'monolith init ' first.");
+      process.exit(1);
+    }
+    
+    const projectConfig = JSON.parse(fs.readFileSync(configPath));
+    const projectId = projectConfig.id;
+
+    console.log(`\n🔗 LINKING GITHUB CI/CD FOR: ${projectConfig.name}`);
+    
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const askQuestion = (query) => new Promise((resolve) => rl.question(query, resolve));
+
+    const repo = await askQuestion('\n📂 Enter your GitHub repository (format: username/repo): ');
+    if (!repo.includes('/')) {
+        console.error("❌ Invalid format. Must be 'username/repo'.");
+        rl.close();
+        process.exit(1);
+    }
+
+    console.log(`\n🔑 To automate this, we need a GitHub Personal Access Token (PAT).`);
+    console.log(`   Generate one here: https://github.com/settings/tokens/new`);
+    console.log(`   (Required permissions: 'repo' and 'admin:repo_hook')`);
+    
+    const token = await askQuestion('\n🔑 Enter your GitHub Token: ');
+    rl.close();
+
+    try {
+      console.log(`\n⚙️  Forging webhook connection to ${repo.trim()}...`);
+      
+      const webhookUrl = `${PLATFORM_URL}/api/webhook?projectId=${projectId}`;
+      
+      // Using GitHub's official REST API to inject the webhook
+      const response = await axios.post(
+        `https://api.github.com/repos/${repo.trim()}/hooks`,
+        {
+          name: 'web',
+          active: true,
+          events: ['push'],
+          config: {
+            url: webhookUrl,
+            content_type: 'json',
+            insecure_ssl: '0'
+          }
+        },
+        {
+          headers: {
+            'Authorization': `token ${token.trim()}`,
+            'Accept': 'application/vnd.github.v3+json'
+          }
+        }
+      );
+
+      console.log(`\n✅ CI/CD PIPELINE ESTABLISHED!`);
+      console.log(`   Webhook injected successfully. Every 'git push' will now trigger an automatic deployment.`);
+    } catch (error) {
+      console.error(`\n❌ Failed to connect GitHub CI/CD:`);
+      console.error(error.response?.data?.message || error.message);
+      if (error.response?.status === 404) {
+        console.error(`   (Hint: Check if the repository name is correct and your token has the right permissions.)`);
+      }
+    }
+  });
+
+program
+  .command('guide')
+  .description('Display the Monolith quick-start guide and architecture flow')
+  .action(() => {
+    const asciiArt = `
+███╗   ███╗ ██████╗ ███╗   ██╗ ██████╗ ██╗     ██╗████████╗██╗  ██╗
+████╗ ████║██╔═══██╗████╗  ██║██╔═══██╗██║     ██║╚══██╔══╝██║  ██║
+██╔████╔██║██║   ██║██╔██╗ ██║██║   ██║██║     ██║   ██║   ███████║
+██║╚██╔╝██║██║   ██║██║╚██╗██║██║   ██║██║     ██║   ██║   ██╔══██║
+██║ ╚═╝ ██║╚██████╔╝██║ ╚████║╚██████╔╝███████╗██║   ██║   ██║  ██║
+╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝   ╚═╝  ╚═╝
+    `;
+    
+    console.log(`\x1b[1m${asciiArt}\x1b[0m`); // Prints in bold
+    console.log(`\x1b[1mTHE BRUTALIST INFRASTRUCTURE ENGINE\x1b[0m\n`);
+    
+    console.log(`\x1b[33mSTEP 1: IGNITION\x1b[0m`);
+    console.log(`  Run: \x1b[36mmonolith init \x1b[0m`);
+    console.log(`  Auto-detects your framework, monorepo structure, and injects build scripts.\n`);
+
+    console.log(`\x1b[33mSTEP 2: PROVISIONING (Optional)\x1b[0m`);
+    console.log(`  Run: \x1b[36mmonolith db create \x1b[0m`);
+    console.log(`  Spins up an isolated PostgreSQL instance and returns your DATABASE_URL.\n`);
+
+    console.log(`\x1b[33mSTEP 3: SECRETS VAULT (Optional)\x1b[0m`);
+    console.log(`  Run: \x1b[36mmonolith env set \x1b[0m`);
+    console.log(`  Injects environment variables directly into your server's secure vault.\n`);
+
+    console.log(`\x1b[33mSTEP 4: DEPLOYMENT\x1b[0m`);
+    console.log(`  \x1b[90mOption A (Manual):\x1b[0m Run \x1b[36mmonolith deploy\x1b[0m from your terminal.`);
+    console.log(`  \x1b[90mOption B (Auto):\x1b[0m   Run \x1b[36mmonolith github connect\x1b[0m to deploy on every 'git push'.\n`);
+    
+    console.log(`\x1b[1mYour PaaS is live and awaiting commands.\x1b[0m\n`);
   });
 
 program.parse(process.argv);
