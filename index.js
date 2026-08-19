@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-
+require('dotenv').config();
 const PLATFORM_URL = 'http://20.2.198.46:4000';
 const axios = require('axios');
 const FormData = require('form-data');
@@ -8,6 +8,26 @@ const {ZipArchive} = require('archiver');   // ✅ require works
 const path = require('path');
 const { program } = require('commander');
 const readline = require('readline');
+const crypto = require('crypto');
+
+axios.defaults.timeout = 300000; // 5-minute timeout for heavy deployments
+
+// --- SECURITY FIX: Attach the API Key to every request ---
+axios.defaults.headers.common['x-api-key'] = process.env.PLATFORM_API_KEY;
+
+function isValidIdentifier(s) { return typeof s === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(s); }
+
+// Masked terminal input for passwords/PATs
+const askHidden = (query) => new Promise((resolve) => {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  rl.stdoutMuted = true;
+  rl.query = query;
+  rl.question(rl.query, (val) => { rl.close(); resolve(val); });
+  rl._writeToOutput = function (s) {
+    if (rl.stdoutMuted) rl.output.write("\x1B[2K\x1B[200D" + rl.query + "*".repeat(rl.line.length));
+    else rl.output.write(s);
+  };
+});
 
 program
   .name('monolith')
@@ -88,8 +108,15 @@ program
   .description('Initialize a new Monolith project in the current directory')
   .argument('<projectName>', 'name of the project')
   .action(async (projectName) => {
+
+    if (!isValidIdentifier(projectName)) {
+      console.error("\n❌ Invalid project name. Use only letters, numbers, dashes, and underscores.");
+      process.exit(1);
+    }
+
     const configDir = path.join(process.cwd(), '.monolith');
     const configFile = path.join(configDir, 'project.json');
+
     if (fs.existsSync(configFile)) {
       const existingConfig = JSON.parse(fs.readFileSync(configFile));
       console.log(`\n⚠️  Project '\x1b[1m${existingConfig.name}\x1b[0m' is already initialized here.`);
@@ -129,7 +156,7 @@ program
 
     if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
 
-    const projectId = `proj_${Math.random().toString(36).slice(-6)}`;
+    const projectId = `proj_${crypto.randomBytes(16).toString('hex')}`;
     const config = { name: projectName, id: projectId };
 
     fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
@@ -174,6 +201,8 @@ program
       let currentPostInstall = pkg.scripts.postinstall ? pkg.scripts.postinstall.split(' && ') : [];
       let modified = false;
 
+      let requiredFolders = [];
+
       for (const [dep, config] of Object.entries(KNOWN_TOOLS)) {
         if (allDeps[dep] && !currentPostInstall.includes(config.command)) {
           const answer = await askQuestion(`\n⚠️  Detected ${config.name}. Add '${config.command}' to build step? (Y/n): `);
@@ -184,20 +213,24 @@ program
             
              // Dynamically fix the Docker caching layer if the tool needs a local folder
             if (config.requiredFolder) {
-              const tomlPath = path.join(targetPackageDir, 'nixpacks.toml');
+              requiredFolders.push(`'${config.requiredFolder}'`);
+            }
+          
+          }
+        }
+      }
+
+      if(requiredFolders.length>0){
+        const tomlPath = path.join(targetPackageDir, 'nixpacks.toml');
               if (!fs.existsSync(tomlPath)) {
                 console.log(`   ⚙️  Auto-generating nixpacks.toml to optimize ${config.name} build caching...`);
                 
                 const nixpacksContent = `[phases.install]
 cmds = ['npm install']
-onlyIncludeFiles = ['package.json', 'package-lock.json', '${config.requiredFolder}']
+onlyIncludeFiles = ['package.json', 'package-lock.json', ${requiredFolders.join(', ')}]
 `;
                 fs.writeFileSync(tomlPath, nixpacksContent);
               }
-            }
-          
-          }
-        }
       }
 
       const customCmd = await askQuestion(`\n⚙️  Any other custom build commands to run after install? (Leave blank for none): `);
@@ -319,7 +352,7 @@ program
     console.log(`   Generate one here: https://github.com/settings/tokens/new`);
     console.log(`   (Required permissions: 'repo' and 'admin:repo_hook')`);
     
-    const token = await askQuestion('\n🔑 Enter your GitHub Token: ');
+    const token = await askHidden('Enter GitHub Personal Access Token (hidden): ');
     rl.close();
 
     try {
