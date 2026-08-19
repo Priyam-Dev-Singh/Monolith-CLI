@@ -66,7 +66,7 @@ program
       console.log(`✅ ${response.data.message}`);
       console.log(`\nDATABASE_URL:`);
       console.log(`\x1b[32m${response.data.databaseUrl}\x1b[0m\n`); 
-      console.log(`Copy this URL and use 'monolith env set DATABASE_URL=' to link it to your app.`);
+      console.log(`Copy this URL and use 'monolith env:set DATABASE_URL=' to link it to your app.`);
     } catch (error) {
       console.error("\n❌ Failed to create database:", error.response?.data?.error || error.message);
       console.log('\n\x1b[33m💡 Need help? Run `monolith guide` to view the platform architecture.\x1b[0m');
