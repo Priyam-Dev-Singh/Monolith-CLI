@@ -128,7 +128,11 @@ program
   } catch (error) {
     console.error(`\n❌ TRANSPORT FAILED`);
     console.error(error.response ? error.response.data : error.message);
-  }
+  }finally {
+        if (fs.existsSync(outputPath)) {
+          fs.unlinkSync(outputPath);
+        }
+    }
 });
 
     // Handle any catastrophic errors during compression
@@ -142,7 +146,7 @@ program
     // Grab everything in the folder, but ruthlessly ignore heavy cache directories
     archive.glob('**/*', {
       cwd: process.cwd(),
-      ignore: ['node_modules/**', '.git/**', '.expo/**', outputFileName]
+      ignore: ['node_modules/**', '.git/**', '.expo/**','.monolith/**','dist/**','.env', outputFileName]
     });
 
     archive.finalize();
