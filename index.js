@@ -7,6 +7,7 @@ const fs = require('fs');
 const {ZipArchive} = require('archiver');   // ✅ require works
 const path = require('path');
 const { program } = require('commander');
+const readline = require('readline');
 
 program
   .name('monolith')
@@ -61,22 +62,83 @@ program
   .command('init')
   .description('Initialize a new Monolith project in the current directory')
   .argument('<projectName>', 'name of the project')
-  .action((projectName) => {
+  .action(async (projectName) => {
     const configDir = path.join(process.cwd(), '.monolith');
     const configFile = path.join(configDir, 'project.json');
 
-    if (!fs.existsSync(configDir)) fs.mkdirSync(configDir);
+    if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
 
-    // Generate a random 6-character ID so names never collide globally
     const projectId = `proj_${Math.random().toString(36).slice(-6)}`;
-    
-    const config = {
-      name: projectName,
-      id: projectId
-    };
+    const config = { name: projectName, id: projectId };
 
     fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
-    console.log(`✅ Project initialized: ${projectName} (${projectId})`);
+    console.log(`✅ Project initialized: ${projectName} (${projectId})\n`);
+
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const askQuestion = (query) => new Promise((resolve) => rl.question(query, resolve));
+
+    // 1. Interactive Directory Routing
+    let buildDir = await askQuestion('📂 Enter your build directory (e.g., backend, api) or press Enter for root: ');
+    buildDir = buildDir.trim();
+
+    let targetPackageDir = process.cwd();
+
+    if (buildDir !== '') {
+      const checkPath = path.join(process.cwd(), buildDir);
+      if (fs.existsSync(checkPath)) {
+        console.log(`\n📦 Generating monolith.json pointing to /${buildDir}...`);
+        fs.writeFileSync(
+          path.join(process.cwd(), 'monolith.json'), 
+          JSON.stringify({ buildDirectory: buildDir }, null, 2)
+        );
+        targetPackageDir = checkPath;
+      } else {
+        console.log(`\n⚠️  Directory '${buildDir}' not found. Defaulting to root.`);
+      }
+    } else {
+      console.log(`\n📦 Using root directory for deployment.`);
+    }
+
+    // 2. Edge-Case Tool Registry & Interactive Fallback
+    const packageJsonPath = path.join(targetPackageDir, 'package.json');
+    if (fs.existsSync(packageJsonPath)) {
+      const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+      const allDeps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+      
+      // Add known edge-cases here as your platform grows
+      const KNOWN_TOOLS = {
+        '@prisma/client': { name: 'Prisma ORM', command: 'npx prisma generate' },
+        'puppeteer': { name: 'Puppeteer', command: 'npx puppeteer browsers install' }
+      };
+
+      pkg.scripts = pkg.scripts || {};
+      let currentPostInstall = pkg.scripts.postinstall ? pkg.scripts.postinstall.split(' && ') : [];
+      let modified = false;
+
+      for (const [dep, config] of Object.entries(KNOWN_TOOLS)) {
+        if (allDeps[dep] && !currentPostInstall.includes(config.command)) {
+          const answer = await askQuestion(`\n⚠️  Detected ${config.name}. Add '${config.command}' to build step? (Y/n): `);
+          if (answer.toLowerCase() !== 'n') {
+            currentPostInstall.push(config.command);
+            modified = true;
+          }
+        }
+      }
+
+      const customCmd = await askQuestion(`\n⚙️  Any other custom build commands to run after install? (Leave blank for none): `);
+      if (customCmd.trim() !== '') {
+        currentPostInstall.push(customCmd.trim());
+        modified = true;
+      }
+
+      if (modified) {
+        pkg.scripts.postinstall = currentPostInstall.join(' && ');
+        fs.writeFileSync(packageJsonPath, JSON.stringify(pkg, null, 2));
+        console.log(`\n✅ Build scripts successfully injected into package.json.`);
+      }
+    }
+    
+    rl.close();
   });
 
 program
