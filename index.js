@@ -82,7 +82,7 @@ program
       console.log('\n\x1b[33m💡 Need help? Run `monolith guide` to view the platform architecture.\x1b[0m');
     }
   });
-  
+
 program
   .command('init')
   .description('Initialize a new Monolith project in the current directory')
@@ -380,20 +380,20 @@ program
     console.log(`\x1b[1mTHE BRUTALIST INFRASTRUCTURE ENGINE\x1b[0m\n`);
     
     console.log(`\x1b[33mSTEP 1: IGNITION\x1b[0m`);
-    console.log(`  Run: \x1b[36mmonolith init \x1b[0m`);
+    console.log(`  Run: \x1b[36mmonolith init <name of project>\x1b[0m`);
     console.log(`  Auto-detects your framework, monorepo structure, and injects build scripts.\n`);
 
     console.log(`\x1b[33mSTEP 2: PROVISIONING (Optional)\x1b[0m`);
-    console.log(`  Run: \x1b[36mmonolith db create \x1b[0m`);
+    console.log(`  Run: \x1b[36mmonolith db:create <name of DB image>\x1b[0m`);
     console.log(`  Spins up an isolated PostgreSQL instance and returns your DATABASE_URL.\n`);
 
     console.log(`\x1b[33mSTEP 3: SECRETS VAULT (Optional)\x1b[0m`);
-    console.log(`  Run: \x1b[36mmonolith env set \x1b[0m`);
+    console.log(`  Run: \x1b[36mmonolith env:set <name of variable>='<value of env variable>'\x1b[0m`);
     console.log(`  Injects environment variables directly into your server's secure vault.\n`);
 
     console.log(`\x1b[33mSTEP 4: DEPLOYMENT\x1b[0m`);
     console.log(`  \x1b[90mOption A (Manual):\x1b[0m Run \x1b[36mmonolith deploy\x1b[0m from your terminal.`);
-    console.log(`  \x1b[90mOption B (Auto):\x1b[0m   Run \x1b[36mmonolith github connect\x1b[0m to deploy on every 'git push'.\n`);
+    console.log(`  \x1b[90mOption B (Auto):\x1b[0m   Run \x1b[36mmonolith github:connect\x1b[0m to deploy on every 'git push'.\n`);
     
     console.log(`\x1b[1mYour PaaS is live and awaiting commands.\x1b[0m\n`);
   });
