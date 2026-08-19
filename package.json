@@ -1,0 +1,21 @@
+{
+  "name": "monolith-cli",
+  "version": "1.0.0",
+  "description": "Command line deployment tool",
+  "main": "index.js",
+  "bin": {
+    "monolith": "./index.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "archiver": "^8.0.0",
+    "axios": "^1.19.0",
+    "commander": "^15.0.0",
+    "form-data": "^4.0.6"
+  }
+}
