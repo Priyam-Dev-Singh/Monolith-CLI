@@ -68,7 +68,7 @@ program
     if (!fs.existsSync(configDir)) fs.mkdirSync(configDir);
 
     // Generate a random 6-character ID so names never collide globally
-    const projectId = `proj_${Math.random().toString(36).substr(2, 6)}`;
+    const projectId = `proj_${Math.random().toString(36).slice(-6)}`;
     
     const config = {
       name: projectName,
