@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+
+const PLATFORM_URL = 'http://20.2.198.46:4000';
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
@@ -12,7 +14,7 @@ program
   .version('1.0.0');
 
 program
-  .command('env set ')
+  .command('env set')
   .description('Set an environment variable (e.g., monolith env set API_KEY=123)')
   .argument('<keyValue>', 'MY_TEST_KEY')
   .action(async (keyValue) => {
@@ -24,7 +26,7 @@ program
     const value = valueParts.join('='); // In case the value itself has an '=' sign
 
     try {
-      const response = await axios.post('http://20.2.198.46:4000/api/env', {
+      const response = await axios.post(`${PLATFORM_URL}/api/env`, {
         projectId: projectId,
         envs: { [key]: value }
       });
@@ -35,13 +37,13 @@ program
   });
 
 program
-  .command('db create ')
+  .command('db create')
   .description('Provision a new Postgres database (e.g., monolith db create study_db)')
   .argument('<dbName>', 'Name of the database created')
   .action(async (dbName) => {
     console.log(`Forging database '${dbName}' on the server...`);
     try {
-      const response = await axios.post('http://20.2.198.46:4000/api/db', {
+      const response = await axios.post(`${PLATFORM_URL}/api/db`, {
         dbName: dbName
       });
       
@@ -56,7 +58,7 @@ program
   });
 
 program
-  .command('init ')
+  .command('init')
   .description('Initialize a new Monolith project in the current directory')
   .argument('<projectName>', 'name of the project')
   .action((projectName) => {
@@ -113,7 +115,7 @@ program
     // Attach the ID to the transport
     form.append('projectId', projectConfig.id); 
 
-    const response = await axios.post('http://20.2.198.46:4000/api/deploy', form, {
+    const response = await axios.post(`${PLATFORM_URL}/api/deploy`, form, {
       headers: { ...form.getHeaders() }
     });
 
