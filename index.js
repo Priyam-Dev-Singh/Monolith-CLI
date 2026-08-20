@@ -125,6 +125,31 @@ program
   });
 
 program
+  .command('db:destroy <containerName>')
+  .description('Permanently delete a database and its data')
+  .action(async (containerName) => {
+    console.log(`\n⚠️  WARNING: You are about to permanently eradicate '${containerName}'.`);
+    console.log('This data CANNOT be recovered.');
+    
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await new Promise(resolve => rl.question(`Type the container name to confirm: `, resolve));
+    rl.close();
+
+    if (answer !== containerName) {
+      console.log('\n❌ Aborted. Container name did not match.'); process.exit(0);
+    }
+
+    const spinner = ora(`Destroying database ${containerName}...`).start();
+    try {
+      axios.defaults.headers.common['x-api-key'] = process.env.PLATFORM_API_KEY;
+      const res = await axios.post(`${PLATFORM_URL}/api/db/destroy`, { containerName });
+      spinner.succeed('🗑️  ' + res.data.message);
+    } catch (err) {
+      spinner.fail('Teardown failed: ' + (err.response?.data?.error || err.message));
+    }
+  });
+
+program
   .command('init')
   .description('Initialize a new Monolith project in the current directory')
   .argument('<projectName>', 'name of the project')
@@ -500,45 +525,47 @@ program
   });
 
 program
-  .command('destroy')
+  .command('destroy [targetId]')
   .description('Permanently delete the current project from the server')
-  .action(async () => {
-    const configDir = path.join(process.cwd(), '.monolith');
-    const configFile = path.join(configDir, 'project.json');
-    if (!fs.existsSync(configFile)) {
-      console.error("\n❌ Not a Monolith project."); process.exit(1);
+  .action(async (targetId) => {
+    let projectId = targetId;
+    let configDir = null;
+
+    // If no ID was provided in the command, try to read the local config
+    if (!projectId) {
+      configDir = path.join(process.cwd(), '.monolith');
+      const configFile = path.join(configDir, 'project.json');
+      if (!fs.existsSync(configFile)) {
+         console.error("\n❌ No targetId provided, and not inside a Monolith project folder.");
+         console.error("Usage: monolith destroy ");
+         process.exit(1);
+      }
+      projectId = JSON.parse(fs.readFileSync(configFile)).id;
     }
-    const config = JSON.parse(fs.readFileSync(configFile));
     
-    console.log(`\n⚠️  WARNING: You are about to permanently eradicate '${config.name}' from Azure.`);
-    console.log('This will delete all containers, environment variables, and routing rules.');
+    console.log(`\n⚠️  WARNING: You are about to permanently eradicate project '${projectId}'.`);
     
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const answer = await new Promise(resolve => rl.question(`Type the project ID (${config.id}) to confirm: `, resolve));
+    const answer = await new Promise(resolve => rl.question(`Type the project ID to confirm: `, resolve));
     rl.close();
 
-    if (answer !== config.id) {
-      console.log('\n❌ Aborted. Project ID did not match.'); process.exit(0);
+    if (answer !== projectId) {
+       console.log('\n❌ Aborted.'); process.exit(0);
     }
 
-    console.log('\n🧨 Initiating tactical teardown...');
-        
-        // 1. START THE SPINNER HERE
-        const spinner = ora('Eradicating project from Azure...').start(); 
-        
-        try {
-          axios.defaults.headers.common['x-api-key'] = process.env.PLATFORM_API_KEY;
-          const res = await axios.post(`${PLATFORM_URL}/api/destroy`, { projectId: config.id });
-          
-          // 2. STOP WITH SUCCESS HERE (Replaces your old console.log)
-          spinner.succeed('🗑️  ' + res.data.message); 
-          
-          fs.rmSync(configDir, { recursive: true, force: true });
-          console.log('🧹 Local .monolith config removed. The project is offline.');
-        } catch (err) {
-          // 3. STOP WITH FAIL HERE (Replaces your old console.error)
-          spinner.fail('Teardown failed: ' + (err.response?.data?.error || err.message)); 
-        }
+    const spinner = ora('Eradicating project from Azure...').start();
+    try {
+      axios.defaults.headers.common['x-api-key'] = process.env.PLATFORM_API_KEY;
+      const res = await axios.post(`${PLATFORM_URL}/api/destroy`, { projectId });
+      spinner.succeed('🗑️  ' + res.data.message);
+      
+      if (configDir && fs.existsSync(configDir)) {
+         fs.rmSync(configDir, { recursive: true, force: true });
+         console.log('🧹 Local .monolith config removed.');
+      }
+    } catch (err) {
+      spinner.fail('Teardown failed: ' + (err.response?.data?.error || err.message));
+    }
   });
 
 program

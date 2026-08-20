@@ -448,5 +448,26 @@ app.post('/api/destroy', requireAuth, async (req, res) => {
   }
 });
 
+// --- DATABASE ERADICATION ENGINE ---
+app.post('/api/db/destroy', requireAuth, async (req, res) => {
+  const { containerName } = req.body;
+  
+  // Ensure it's a valid string to prevent shell injection
+  if (!isSafeIdentifier(containerName)) {
+    return res.status(400).json({ error: "Invalid container name." });
+  }
+
+  console.log(`\n🧨 Initiating tactical teardown for DB: ${containerName}...`);
+
+  try {
+    // -f forces it to stop and remove. -v deletes the attached persistent storage volume.
+    await execAsync(`docker rm -f -v ${containerName}`);
+    res.json({ message: `Database ${containerName} and its volumes have been permanently eradicated.` });
+  } catch (error) {
+    console.error('DB Teardown Error:', error.message);
+    res.status(500).json({ error: 'Failed to destroy database. It may not exist.' });
+  }
+});
+
 const PORT = 4000;
 app.listen(PORT, () => console.log('🛡️  Monolith Receiver listening on port ' + PORT));
