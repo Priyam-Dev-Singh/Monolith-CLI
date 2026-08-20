@@ -134,28 +134,36 @@ async function buildAndDeploy(projectId, extractDest) {
   }
 
   const envFilePath = path.join(__dirname, 'envs', projectId + '.env');
-  let envFlag = '';
+  let dockerEnvFlag = '';
+  let nixpacksEnvFlag = '';
+  
   if (fs.existsSync(envFilePath)) {
-    envFlag = `--env-file ${envFilePath} `;
     console.log('🔒 Injecting secure environment vault...');
+    
+    // 1. Docker wants the file path directly
+    dockerEnvFlag = `--env-file ${envFilePath} `;
+    
+    // 2. Nixpacks wants individual --env KEY=VALUE flags
+    const envLines = fs.readFileSync(envFilePath, 'utf8').split('\n').filter(line => line.trim() !== '');
+    nixpacksEnvFlag = envLines.map(line => `--env ${line.trim()}`).join(' ') + ' ';
   }
 
   try {
-    // 1. Build the new image
-    await execAsync(`nixpacks build ${buildPath} --name ${imageName} ${envFlag}`);
+    // 1. Build the new image (Using Nixpacks formatting)
+    await execAsync(`nixpacks build ${buildPath} --name ${imageName} ${nixpacksEnvFlag}`);
     
-    // 2. Find currently running containers for this project (to stop later)
+    // 2. Find currently running containers for this project
     let oldContainers = '';
     try {
       const { stdout } = await execAsync(`docker ps -q -f "name=^live_${projectId}_"`);
       oldContainers = stdout.trim();
-    } catch (e) {} // Ignore if no previous containers exist
+    } catch (e) {}
 
     console.log('Forging the new container...');
-    // CRASH RECOVERY: --restart unless-stopped ensures it reboots if it fails overnight
-    // DYNAMIC PORT: -p 0:3000 forces Docker to find a free port instead of hardcoding 3000
-    await execAsync(`docker run -d --restart unless-stopped --name ${newContainerName} -p 0:3000 ${envFlag}${imageName}`);
-
+    
+    // CRASH RECOVERY & DYNAMIC PORT (Using Docker formatting)
+    await execAsync(`docker run -d --restart unless-stopped --name ${newContainerName} -p 0:3000 ${dockerEnvFlag}${imageName}`);
+    
     // HEALTH CHECK: Wait 5 seconds to see if it crashes on boot
     console.log('🩺 Running health check...');
     await new Promise(resolve => setTimeout(resolve, 5000));
