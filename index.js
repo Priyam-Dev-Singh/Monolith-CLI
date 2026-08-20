@@ -331,15 +331,35 @@ program
 
     archive.on('error', (err) => { throw err; });
     archive.pipe(output);
-    
-    // --- THE FIX: Intelligent Ignoring ---
-    archive.glob('**/*', {
-      cwd: process.cwd(),
-      ignore: ['node_modules/**', '.git/**', '.env', '*.zip', '.monolith/**']
-    });
-    
-    archive.finalize();
+
+    // --- THE FIX: Smart Payload Targeting ---
+        const monolithConfigPath = path.join(process.cwd(), 'monolith.json');
+        let targetDir = '';
+        
+        if (fs.existsSync(monolithConfigPath)) {
+          const mConfig = JSON.parse(fs.readFileSync(monolithConfigPath, 'utf8'));
+          targetDir = mConfig.buildDirectory || '';
+        }
+
+        if (targetDir && targetDir !== '') {
+          // If a specific build directory exists, ONLY pack that folder and the config
+          archive.glob('**/*', {
+            cwd: path.join(process.cwd(), targetDir),
+            ignore: ['**/node_modules/**', '**/.git/**', '**/.env']
+          }, { prefix: targetDir }); // Preserves the folder name in the zip
+          
+          archive.file(monolithConfigPath, { name: 'monolith.json' });
+        } else {
+          // If it's a root project, pack everything except standard bloat
+          archive.glob('**/*', {
+            cwd: process.cwd(),
+            ignore: ['**/node_modules/**', '**/.git/**', '**/.env', '**/*.zip', '**/.monolith/**']
+          });
+        }
+        
+        archive.finalize();
   });
+
 program
   .command('github:connect')
   .description('Automatically configure GitHub CI/CD webhooks for your repository')
