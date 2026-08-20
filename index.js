@@ -661,7 +661,7 @@ program
     console.log(`  ${red('destroy [project-id]'.padEnd(CMD_COL, ' '))}${gray('Permanently eradicate a project and its resources')}`);
 
     console.log('\n' + rule());
-    console.log('\n  ' + bold(`Structure raised. It's yours.`) + '\n');
+    console.log('\n  ' + bold(`Let's deploy your dream project.`) + '\n');
   });
 
 program
