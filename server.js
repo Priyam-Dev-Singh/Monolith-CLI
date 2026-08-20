@@ -423,10 +423,19 @@ app.post('/api/destroy', requireAuth, async (req, res) => {
   console.log(`\n🧨 Initiating tactical teardown for ${projectId}...`);
 
   try {
-    // 1. Destroy all containers (active and rollback backups)
-    const { stdout } = await execAsync(`docker ps -a -q -f "name=^live_${projectId}_"`);
-    const containers = stdout.trim().replace(/\n/g, ' ');
-    if (containers) await execAsync(`docker rm -f ${containers}`);
+    // 1. Destroy all containers (legacy and blue/green backups)
+    const { stdout } = await execAsync(`docker ps -a --format "{{.Names}}"`);
+    const allContainers = stdout.trim().split('\n').filter(Boolean);
+    
+    // Target exact matches (legacy) OR timestamped matches (modern)
+    const targets = allContainers.filter(name => 
+      name === `live_${projectId}` || name.startsWith(`live_${projectId}_`)
+    );
+
+    if (targets.length > 0) {
+      console.log(`Executing container purge: ${targets.join(', ')}`);
+      await execAsync(`docker rm -f ${targets.join(' ')}`);
+    }
 
     // 2. Eradicate Caddy route
     const caddyFile = path.join(__dirname, 'caddy-configs', `${projectId}.caddy`);
