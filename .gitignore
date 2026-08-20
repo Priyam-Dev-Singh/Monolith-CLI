@@ -1,0 +1,9 @@
+# Secure environments
+.env
+.env.*
+
+# Node modules
+node_modules/
+
+# Mac system files
+.DS_Store
