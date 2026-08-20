@@ -346,7 +346,7 @@ program
 
     output.on('close', async () => {
       console.log(`📦 Packed ${archive.pointer()} total bytes.`);
-      console.log('🚀 Uploading payload to Azure Server...');
+      console.log('🚀 Uploading payload to Azure Server...(this may take some time)');
       
       const form = new FormData();
       form.append('projectId', config.id);
