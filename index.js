@@ -572,6 +572,18 @@ program
   .command('guide')
   .description('Display the Monolith quick-start guide and architecture flow')
   .action(() => {
+    // --- Color helpers (raw ANSI, no extra deps needed) ---
+    const bold   = (s) => `\x1b[1m${s}\x1b[0m`;
+    const dim    = (s) => `\x1b[2m${s}\x1b[0m`;
+    const cyan   = (s) => `\x1b[36m${s}\x1b[0m`;
+    const yellow = (s) => `\x1b[33m${s}\x1b[0m`;
+    const green  = (s) => `\x1b[32m${s}\x1b[0m`;
+    const gray   = (s) => `\x1b[90m${s}\x1b[0m`;
+    const red    = (s) => `\x1b[31m${s}\x1b[0m`;
+
+    const WIDTH = 68;
+    const rule = () => gray('─'.repeat(WIDTH));
+
     const asciiArt = `
 ███╗   ███╗ ██████╗ ███╗   ██╗ ██████╗ ██╗     ██╗████████╗██╗  ██╗
 ████╗ ████║██╔═══██╗████╗  ██║██╔═══██╗██║     ██║╚══██╔══╝██║  ██║
@@ -579,28 +591,77 @@ program
 ██║╚██╔╝██║██║   ██║██║╚██╗██║██║   ██║██║     ██║   ██║   ██╔══██║
 ██║ ╚═╝ ██║╚██████╔╝██║ ╚████║╚██████╔╝███████╗██║   ██║   ██║  ██║
 ╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝   ╚═╝  ╚═╝
-    `;
-    
-    console.log(`\x1b[1m${asciiArt}\x1b[0m`); // Prints in bold
-    console.log(`\x1b[1mTHE BRUTALIST INFRASTRUCTURE ENGINE\x1b[0m\n`);
-    
-    console.log(`\x1b[33mSTEP 1: IGNITION\x1b[0m`);
-    console.log(`  Run: \x1b[36mmonolith init <name of project>\x1b[0m`);
-    console.log(`  Auto-detects your framework, monorepo structure, and injects build scripts.\n`);
+`;
 
-    console.log(`\x1b[33mSTEP 2: PROVISIONING (Optional)\x1b[0m`);
-    console.log(`  Run: \x1b[36mmonolith db:create <name of DB image>\x1b[0m`);
-    console.log(`  Spins up an isolated PostgreSQL instance and returns your DATABASE_URL.\n`);
+    console.log(bold(asciiArt));
+    console.log('  ' + bold('YOUR SERVER. NO MIDDLEMEN.') + '   ' + dim('v1.0.0'));
+    console.log(rule());
 
-    console.log(`\x1b[33mSTEP 3: SECRETS VAULT (Optional)\x1b[0m`);
-    console.log(`  Run: \x1b[36mmonolith env:set <name of variable>='<value of env variable>'\x1b[0m`);
-    console.log(`  Injects environment variables directly into your server's secure vault.\n`);
+    // ---------- PIPELINE ----------
+    console.log('\n  ' + bold(yellow('⚡ THE PIPELINE')) + '\n');
 
-    console.log(`\x1b[33mSTEP 4: DEPLOYMENT\x1b[0m`);
-    console.log(`  \x1b[90mOption A (Manual):\x1b[0m Run \x1b[36mmonolith deploy\x1b[0m from your terminal.`);
-    console.log(`  \x1b[90mOption B (Auto):\x1b[0m   Run \x1b[36mmonolith github:connect\x1b[0m to deploy on every 'git push'.\n`);
-    
-    console.log(`\x1b[1mYour PaaS is live and awaiting commands.\x1b[0m\n`);
+    const circled = ['①', '②', '③', '④'];
+
+    function step(i, title, tag, cmd, desc, isLast) {
+      const label = tag ? `${title}  ${dim('(' + tag + ')')}` : title;
+      console.log(`  ${yellow(circled[i - 1])}  ${bold(label)}`);
+      console.log(`      ${cyan('$ ' + cmd)}`);
+      console.log(`      ${gray(desc)}`);
+      if (!isLast) {
+        console.log(gray('      │'));
+        console.log(gray('      ▼'));
+      }
+    }
+
+    step(1, 'SETUP', null, 'monolith init <project-name>',
+      'Detects your framework, injects build scripts, writes .gitignore');
+    step(2, 'PROVISION', 'optional', 'monolith db:create <db-name>',
+      'Spins up Postgres / MySQL / Mongo / Redis, auto-linked to your vault');
+    step(3, 'SECRETS', 'optional', 'monolith env:set KEY=value',
+      'Encrypts and stores an environment variable on the server');
+
+    console.log(`  ${yellow(circled[3])}  ${bold('DEPLOY')}`);
+    console.log(`      ${gray('├─')} ${green('Manual')}      ${cyan('$ monolith deploy')}`);
+    console.log(`      ${gray('│')}                 ${gray('Pack & ship on demand, whenever you want')}`);
+    console.log(`      ${gray('└─')} ${green('Automatic')}   ${cyan('$ monolith github:connect')}`);
+    console.log(`      ${' '.repeat(17)}${gray('Deploys automatically on every `git push`')}`);
+
+    console.log('\n' + rule());
+
+    // ---------- COMMAND REFERENCE ----------
+    console.log('\n  ' + bold(yellow('📖 COMMAND REFERENCE')));
+
+    const CMD_COL = 40;
+    const row = (cmd, desc) => {
+      const padded = cmd.padEnd(CMD_COL, ' ');
+      console.log(`  ${cyan(padded)}${gray(desc)}`);
+    };
+    const section = (title) => console.log('\n  ' + dim(title));
+
+    section('SETUP');
+    row('init <project-name>', 'Initialize a project in the current directory');
+
+    section('INFRASTRUCTURE');
+    row('db:create <db-name>', 'Provision a database, auto-link it to the vault');
+    row('db:destroy <container-name>', 'Permanently delete a database');
+
+    section('SECRETS');
+    row('env:set KEY=value', 'Store an encrypted environment variable');
+
+    section('DEPLOYMENT');
+    row('deploy', 'Pack the current directory and ship it manually');
+    row('github:connect', 'Wire up automatic deploy-on-push CI/CD');
+    row('rollback', 'Instantly revert to the previous working deployment');
+
+    section('OPERATIONS');
+    row('list', 'View all active applications and databases');
+    row('logs', 'Stream live application logs in real time');
+
+    section('DESTRUCTIVE');
+    console.log(`  ${red('destroy [project-id]'.padEnd(CMD_COL, ' '))}${gray('Permanently eradicate a project and its resources')}`);
+
+    console.log('\n' + rule());
+    console.log('\n  ' + bold(`Structure raised. It's yours.`) + '\n');
   });
 
 program
