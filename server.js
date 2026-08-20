@@ -2,6 +2,7 @@ const express = require('express');
 require('dotenv').config(); // <-- Loads the server's .env file
 const crypto = require('crypto');
 const multer = require('multer');
+const util = require('util');
 const { exec } = require('child_process');
 const execAsync = util.promisify(exec);
 const fs = require('fs');
@@ -74,10 +75,12 @@ async function getFreePort(min, max) {
 // --- CORE DEPLOYMENT ENGINE ---
 
 // FIX 7: Make engine asynchronous
+// --- THE BLUE/GREEN DEPLOYMENT ENGINE ---
 async function buildAndDeploy(projectId, extractDest) {
-  console.log('Building image for ' + projectId + '...');
-  const imageName = 'img_' + projectId;
-  const containerName = 'live_' + projectId;
+  console.log(`\n🚀 Starting Zero-Downtime Deployment for ${projectId}...`);
+  const version = Date.now(); // Unique timestamp for this build
+  const imageName = `img_${projectId}`;
+  const newContainerName = `live_${projectId}_${version}`;
   let buildPath = extractDest;
   const monolithConfigPath = path.join(extractDest, 'monolith.json');
 
@@ -88,24 +91,43 @@ async function buildAndDeploy(projectId, extractDest) {
     } catch (err) {}
   }
 
-  // FIX 1: Shell Injection Guard - Pass the file directly instead of parsing strings
   const envFilePath = path.join(__dirname, 'envs', projectId + '.env');
   let envFlag = '';
   if (fs.existsSync(envFilePath)) {
     envFlag = `--env-file ${envFilePath} `;
-    console.log('Injecting secure environment vault...');
+    console.log('🔒 Injecting secure environment vault...');
   }
 
   try {
-    // FIX 7: Await async executions so the server stays alive for other users
+    // 1. Build the new image
     await execAsync(`nixpacks build ${buildPath} --name ${imageName} ${envFlag}`);
     
-    console.log('Forging the container...');
-    try { await execAsync(`docker rm -f ${containerName}`); } catch (e) {}
-    
-    await execAsync(`docker run -d --name ${containerName} -p 3000 ${envFlag}${imageName}`);
+    // 2. Find currently running containers for this project (to stop later)
+    let oldContainers = '';
+    try {
+      const { stdout } = await execAsync(`docker ps -q -f "name=^live_${projectId}_"`);
+      oldContainers = stdout.trim();
+    } catch (e) {} // Ignore if no previous containers exist
 
-    const { stdout: portBuffer } = await execAsync(`docker inspect --format='{{(index (index .NetworkSettings.Ports "3000/tcp") 0).HostPort}}' ${containerName}`);
+    console.log('Forging the new container...');
+    // CRASH RECOVERY: --restart unless-stopped ensures it reboots if it fails overnight
+    // DYNAMIC PORT: -p 0:3000 forces Docker to find a free port instead of hardcoding 3000
+    await execAsync(`docker run -d --restart unless-stopped --name ${newContainerName} -p 0:3000 ${envFlag}${imageName}`);
+
+    // HEALTH CHECK: Wait 5 seconds to see if it crashes on boot
+    console.log('🩺 Running health check...');
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    const { stdout: status } = await execAsync(`docker inspect -f '{{.State.Running}}' ${newContainerName}`);
+    
+    if (status.trim() !== 'true') {
+      // It crashed! Destroy the bad container and abort before touching Caddy.
+      console.error('❌ Health check failed. Container crashed on startup.');
+      await execAsync(`docker rm -f ${newContainerName}`);
+      throw new Error('Deployment failed health check. Traffic was not routed.');
+    }
+
+    // 3. It survived. Wire up Caddy.
+    const { stdout: portBuffer } = await execAsync(`docker inspect --format='{{(index (index .NetworkSettings.Ports "3000/tcp") 0).HostPort}}' ${newContainerName}`);
     const assignedPort = portBuffer.toString().trim();
 
     const domain = projectId + '.20.2.198.46.nip.io';
@@ -113,8 +135,15 @@ async function buildAndDeploy(projectId, extractDest) {
     if (!fs.existsSync(caddyDir)) fs.mkdirSync(caddyDir, { recursive: true });
     
     fs.writeFileSync(path.join(caddyDir, projectId + '.caddy'), `http://${domain} {\n  reverse_proxy localhost:${assignedPort}\n}\n`);
-
     await execAsync('caddy reload --config ./Caddyfile', { cwd: __dirname });
+    
+    // 4. Gracefully retire the old container (Stop, do not delete, for rollback)
+    if (oldContainers) {
+      const ids = oldContainers.split('\n').join(' ');
+      console.log(`Stopping previous versions: ${ids}`);
+      await execAsync(`docker stop ${ids}`);
+    }
+
     console.log('✅ Deployment live: http://' + domain);
     return domain;
   } catch (error) {
@@ -135,7 +164,7 @@ app.post('/api/deploy', requireAuth, upload.single('payload'), async(req, res) =
   try {
     if (fs.existsSync(extractDest)) fs.rmSync(extractDest, { recursive: true, force: true });
     fs.mkdirSync(extractDest, { recursive: true });
-    execAsync('unzip -o ' + zipPath + ' -d ' + extractDest);
+    await execAsync('unzip -o ' + zipPath + ' -d ' + extractDest);
     fs.unlinkSync(zipPath);
 
     const domain = await buildAndDeploy(projectId, extractDest);
@@ -268,6 +297,66 @@ app.get('/api/logs', requireAuth, (req, res) => {
     res.json({ logs: `⬛ No recent deployment logs found for ${projectId}. Run a deployment first.` });
   }
 });
+
+// --- ROLLBACK ENGINE ---
+app.post('/api/rollback', requireAuth, async (req, res) => {
+  const { projectId } = req.body;
+  if (!isValidProjectId(projectId)) return res.status(400).json({ error: 'Invalid projectId' });
+
+  try {
+    // 1. Get all containers for this project and sort them by timestamp (newest first)
+    const { stdout } = await execAsync(`docker ps -a --format "{{.Names}}" -f "name=^live_${projectId}_"`);
+    const containers = stdout.trim().split('\n').filter(Boolean);
+
+    if (containers.length < 2) {
+      return res.status(400).json({ error: 'No previous versions found to rollback to.' });
+    }
+
+    containers.sort((a, b) => {
+      const tsA = parseInt(a.split('_').pop(), 10);
+      const tsB = parseInt(b.split('_').pop(), 10);
+      return tsB - tsA; // Descending
+    });
+
+    // 2. Find the currently running container
+    let runningIndex = -1;
+    for (let i = 0; i < containers.length; i++) {
+       const { stdout: state } = await execAsync(`docker inspect -f '{{.State.Running}}' ${containers[i]}`);
+       if (state.trim() === 'true') {
+         runningIndex = i;
+         break;
+       }
+    }
+
+    if (runningIndex === -1) return res.status(400).json({ error: 'No active container found to rollback from.' });
+    if (runningIndex + 1 >= containers.length) return res.status(400).json({ error: 'Already at the oldest available version.' });
+
+    const currentContainer = containers[runningIndex];
+    const targetContainer = containers[runningIndex + 1]; // The immediate previous version
+
+    console.log(`⏪ Rolling back ${projectId} from ${currentContainer} to ${targetContainer}`);
+
+    // 3. Wake up the old container and get its port
+    await execAsync(`docker start ${targetContainer}`);
+    const { stdout: portBuffer } = await execAsync(`docker inspect --format='{{(index (index .NetworkSettings.Ports "3000/tcp") 0).HostPort}}' ${targetContainer}`);
+    const assignedPort = portBuffer.toString().trim();
+
+    // 4. Instantly rewire Caddy
+    const domain = projectId + '.20.2.198.46.nip.io';
+    const caddyDir = path.join(__dirname, 'caddy-configs');
+    fs.writeFileSync(path.join(caddyDir, projectId + '.caddy'), `http://${domain} {\n  reverse_proxy localhost:${assignedPort}\n}\n`);
+    await execAsync('caddy reload --config ./Caddyfile', { cwd: __dirname });
+
+    // 5. Put the bad container to sleep
+    await execAsync(`docker stop ${currentContainer}`);
+
+    res.json({ message: `⏪ Successfully rolled back to previous version.`, domain });
+  } catch (error) {
+    console.error('Rollback Error:', error.message);
+    res.status(500).json({ error: 'Failed to perform rollback.' });
+  }
+});
+
 
 const PORT = 4000;
 app.listen(PORT, () => console.log('🛡️  Monolith Receiver listening on port ' + PORT));

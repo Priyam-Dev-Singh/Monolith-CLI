@@ -434,6 +434,34 @@ program
   });
 
 program
+  .command('rollback')
+  .description('Instantly revert to the previous working deployment')
+  .action(async () => {
+    const configDir = path.join(process.cwd(), '.monolith');
+    const configFile = path.join(configDir, 'project.json');
+
+    if (!fs.existsSync(configFile)) {
+      console.error("\n❌ Not a Monolith project. Run 'monolith init' first.");
+      process.exit(1);
+    }
+
+    const config = JSON.parse(fs.readFileSync(configFile));
+    console.log('\n⏪ INITIATING INSTANT ROLLBACK...');
+
+    try {
+      const res = await axios.post(`${PLATFORM_URL}/api/rollback`, { projectId: config.id });
+      console.log('\n✅ ' + res.data.message);
+      console.log(`🌐 Live at: http://${res.data.domain}`);
+    } catch (err) {
+      if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+        console.error('\n❌ Can\'t reach the Monolith server.');
+      } else {
+        console.error('\n❌ Rollback failed:', err.response?.data?.error || err.message);
+      }
+    }
+  });
+
+program
   .command('guide')
   .description('Display the Monolith quick-start guide and architecture flow')
   .action(() => {
