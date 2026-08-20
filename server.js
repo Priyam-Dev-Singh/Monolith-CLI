@@ -226,55 +226,70 @@ app.post('/api/env', requireAuth, (req, res) => {
 app.post('/api/db', requireAuth, async (req, res) => {
   const { dbName, dbType = 'postgres' } = req.body;
 
-  // 1. COMMAND INJECTION GUARD
   if (!isSafeIdentifier(dbName)) {
     return res.status(400).json({ error: "Invalid database name. Use only letters, numbers, dashes, and underscores." });
   }
 
-  // 2. CRYPTOGRAPHIC SECURE PASSWORD
   const dbId = crypto.randomBytes(3).toString('hex');
   const password = crypto.randomBytes(16).toString('hex');
   const containerName = `${dbType}_${dbName}_${dbId}`;
 
+  // SECURITY: Temporary Env File Setup to prevent ps aux leaking
+  const dbEnvDir = path.join(__dirname, 'db-envs');
+  if (!fs.existsSync(dbEnvDir)) fs.mkdirSync(dbEnvDir, { recursive: true });
+  const envFilePath = path.join(dbEnvDir, `${containerName}.env`);
+
   let dockerCmd = '';
   let connectionString = '';
+  let envContent = '';
 
   try {
-    // 3. COLLISION-FREE PORT ASSIGNMENT
     let port;
     switch(dbType) {
       case 'postgres':
         port = await getFreePort(54320, 55000);
-        dockerCmd = `docker run --name ${containerName} -e POSTGRES_PASSWORD=${password} -e POSTGRES_USER=monolith -e POSTGRES_DB=${dbName} -p ${port}:5432 -d postgres:15-alpine`;
+        envContent = `POSTGRES_PASSWORD=${password}\nPOSTGRES_USER=monolith\nPOSTGRES_DB=${dbName}`;
+        // Added: --restart unless-stopped, --env-file, and -v (Volume Persistence)
+        dockerCmd = `docker run --name ${containerName} --restart unless-stopped --env-file ${envFilePath} -v ${containerName}_data:/var/lib/postgresql/data -p ${port}:5432 -d postgres:15-alpine`;
         connectionString = `postgresql://monolith:${password}@20.2.198.46:${port}/${dbName}`;
         break;
       case 'mysql':
         port = await getFreePort(43300, 44000);
-        dockerCmd = `docker run --name ${containerName} -e MYSQL_ROOT_PASSWORD=${password} -e MYSQL_DATABASE=${dbName} -p ${port}:3306 -d mysql:8.0`;
+        envContent = `MYSQL_ROOT_PASSWORD=${password}\nMYSQL_DATABASE=${dbName}`;
+        dockerCmd = `docker run --name ${containerName} --restart unless-stopped --env-file ${envFilePath} -v ${containerName}_data:/var/lib/mysql -p ${port}:3306 -d mysql:8.0`;
         connectionString = `mysql://root:${password}@20.2.198.46:${port}/${dbName}`;
         break;
       case 'mongodb':
         port = await getFreePort(37017, 38000);
-        dockerCmd = `docker run --name ${containerName} -e MONGO_INITDB_ROOT_USERNAME=admin -e MONGO_INITDB_ROOT_PASSWORD=${password} -p ${port}:27017 -d mongo:6`;
+        envContent = `MONGO_INITDB_ROOT_USERNAME=admin\nMONGO_INITDB_ROOT_PASSWORD=${password}`;
+        dockerCmd = `docker run --name ${containerName} --restart unless-stopped --env-file ${envFilePath} -v ${containerName}_data:/data/db -p ${port}:27017 -d mongo:6`;
         connectionString = `mongodb://admin:${password}@20.2.198.46:${port}/?authSource=admin`;
         break;
       case 'redis':
         port = await getFreePort(60000, 61000);
-        dockerCmd = `docker run --name ${containerName} -p ${port}:6379 -d redis:7-alpine --requirepass ${password}`;
+        envContent = `REDIS_PASSWORD=${password}`;
+        // Redis requires a custom command to ingest the password from the environment securely
+        dockerCmd = `docker run --name ${containerName} --restart unless-stopped --env-file ${envFilePath} -v ${containerName}_data:/data -p ${port}:6379 -d redis:7-alpine sh -c 'exec redis-server --requirepass "$REDIS_PASSWORD"'`;
         connectionString = `redis://default:${password}@20.2.198.46:${port}`;
         break;
       default:
         return res.status(400).json({ error: "Unsupported database engine." });
     }
 
-    // 4. ASYNCHRONOUS EXECUTION (Doesn't block the Node event loop)
-    exec(dockerCmd, (error, stdout, stderr) => {
-      if (error) return res.status(500).json({ error: "Failed to provision database on server." });
-      res.json({ message: `${dbType.toUpperCase()} Engine '${dbName}' online.`, databaseUrl: connectionString });
-    });
+    // Write the secret file, strictly readable only by Node
+    fs.writeFileSync(envFilePath, envContent, { mode: 0o600 });
+
+    // CLEAN ASYNC EXECUTION (Replaces the messy callback)
+    await execAsync(dockerCmd);
+
+    res.json({ message: `${dbType.toUpperCase()} Engine '${dbName}' online.`, databaseUrl: connectionString });
 
   } catch (err) {
-    res.status(500).json({ error: "Infrastructure capacity full. No ports available." });
+    console.error('DB Provisioning Error:', err);
+    res.status(500).json({ error: "Failed to provision database." });
+  } finally {
+    // SECURITY: Docker ingests envs at creation. We instantly burn the file so it doesn't sit on the hard drive.
+    if (fs.existsSync(envFilePath)) fs.unlinkSync(envFilePath);
   }
 });
 
@@ -357,6 +372,69 @@ app.post('/api/rollback', requireAuth, async (req, res) => {
   }
 });
 
+// --- THE READ ENGINE (STATUS) ---
+app.get('/api/list', requireAuth, async (req, res) => {
+  try {
+    // Query Docker for everything currently running
+    const { stdout } = await execAsync(`docker ps --format '{{.Names}}|{{.Status}}|{{.Ports}}'`);
+    const lines = stdout.trim().split('\n').filter(Boolean);
+    
+    const apps = [];
+    const dbs = [];
+
+    lines.forEach(line => {
+      const [name, status] = line.split('|');
+      if (name.startsWith('live_')) {
+        const parts = name.split('_');
+        const projectId = parts[1] + '_' + parts[2];
+        const domain = `http://${projectId}.20.2.198.46.nip.io`;
+        // Only add the newest active container for each app to the list
+        if (!apps.find(a => a.project === projectId)) {
+          apps.push({ project: projectId, status, domain });
+        }
+      } else if (name.match(/^(postgres|mysql|mongodb|redis)_/)) {
+        dbs.push({ engine: name, status });
+      }
+    });
+
+    res.json({ apps, dbs });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch infrastructure status.' });
+  }
+});
+
+// --- THE DESTROY ENGINE (TEARDOWN) ---
+app.post('/api/destroy', requireAuth, async (req, res) => {
+  const { projectId } = req.body;
+  if (!isValidProjectId(projectId)) return res.status(400).json({ error: 'Invalid projectId' });
+
+  console.log(`\n🧨 Initiating tactical teardown for ${projectId}...`);
+
+  try {
+    // 1. Destroy all containers (active and rollback backups)
+    const { stdout } = await execAsync(`docker ps -a -q -f "name=^live_${projectId}_"`);
+    const containers = stdout.trim().replace(/\n/g, ' ');
+    if (containers) await execAsync(`docker rm -f ${containers}`);
+
+    // 2. Eradicate Caddy route
+    const caddyFile = path.join(__dirname, 'caddy-configs', `${projectId}.caddy`);
+    if (fs.existsSync(caddyFile)) fs.unlinkSync(caddyFile);
+    await execAsync('caddy reload --config ./Caddyfile', { cwd: __dirname }).catch(() => {});
+
+    // 3. Burn the Env Vault
+    const envFile = path.join(__dirname, 'envs', `${projectId}.env`);
+    if (fs.existsSync(envFile)) fs.unlinkSync(envFile);
+
+    // 4. Wipe the Staging folder
+    const stagingDir = path.join(__dirname, 'staging', projectId);
+    if (fs.existsSync(stagingDir)) await execAsync(`rm -rf ${stagingDir}`);
+
+    res.json({ message: `Project ${projectId} has been completely eradicated from the server.` });
+  } catch (error) {
+    console.error('Teardown Error:', error.message);
+    res.status(500).json({ error: 'Failed to destroy project infrastructure.' });
+  }
+});
 
 const PORT = 4000;
 app.listen(PORT, () => console.log('🛡️  Monolith Receiver listening on port ' + PORT));

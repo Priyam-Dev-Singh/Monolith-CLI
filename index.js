@@ -462,6 +462,64 @@ program
   });
 
 program
+  .command('list')
+  .description('View all active deployments and databases on the server')
+  .action(async () => {
+    console.log('\n📡 Scanning Azure infrastructure...');
+    try {
+      axios.defaults.headers.common['x-api-key'] = process.env.PLATFORM_API_KEY;
+      const res = await axios.get(`${PLATFORM_URL}/api/list`);
+
+      if (res.data.apps.length > 0) {
+        console.log('\n⬛ ACTIVE APPLICATIONS');
+        console.table(res.data.apps);
+      } else { console.log('\n⬛ ACTIVE APPLICATIONS: None'); }
+
+      if (res.data.dbs.length > 0) {
+        console.log('\n🗄️  ACTIVE DATABASES');
+        console.table(res.data.dbs);
+      } else { console.log('\n🗄️  ACTIVE DATABASES: None'); }
+    } catch (err) {
+      console.error('\n❌ Failed to fetch status:', err.response?.data?.error || err.message);
+    }
+  });
+
+program
+  .command('destroy')
+  .description('Permanently delete the current project from the server')
+  .action(async () => {
+    const configDir = path.join(process.cwd(), '.monolith');
+    const configFile = path.join(configDir, 'project.json');
+    if (!fs.existsSync(configFile)) {
+      console.error("\n❌ Not a Monolith project."); process.exit(1);
+    }
+    const config = JSON.parse(fs.readFileSync(configFile));
+    
+    console.log(`\n⚠️  WARNING: You are about to permanently eradicate '${config.name}' from Azure.`);
+    console.log('This will delete all containers, environment variables, and routing rules.');
+    
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await new Promise(resolve => rl.question(`Type the project ID (${config.id}) to confirm: `, resolve));
+    rl.close();
+
+    if (answer !== config.id) {
+      console.log('\n❌ Aborted. Project ID did not match.'); process.exit(0);
+    }
+
+    console.log('\n🧨 Initiating tactical teardown...');
+    try {
+      axios.defaults.headers.common['x-api-key'] = process.env.PLATFORM_API_KEY;
+      const res = await axios.post(`${PLATFORM_URL}/api/destroy`, { projectId: config.id });
+      console.log('\n✅ 🗑️  ' + res.data.message);
+      
+      fs.rmSync(configDir, { recursive: true, force: true });
+      console.log('🧹 Local .monolith config removed. The project is offline.');
+    } catch (err) {
+      console.error('\n❌ Teardown failed:', err.response?.data?.error || err.message);
+    }
+  });
+
+program
   .command('guide')
   .description('Display the Monolith quick-start guide and architecture flow')
   .action(() => {
