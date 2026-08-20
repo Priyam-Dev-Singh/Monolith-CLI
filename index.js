@@ -98,9 +98,13 @@ program
         envs: { [envKey]: dbUrl }
       });
 
-      console.log(`✅ Database linked successfully!`);
+    console.log(`✅ Database linked successfully!`);
     } catch (error) {
-      console.error("\n❌ Failed to create database:", error.response?.data?.error || error.message);
+      if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+    console.error('\n❌ Can\'t reach the Monolith server — is it running? (Connection Refused)');
+  } else {
+    console.error("\n❌ Failed to create database:", error.response?.data?.error || error.message);
+  }
       console.log('\n\x1b[33m💡 Need help? Run `monolith guide` to view the platform architecture.\x1b[0m');
     }
   });
@@ -162,6 +166,19 @@ program
     const config = { name: projectName, id: projectId };
 
     fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+    
+    // --- FIX 8: Auto-generate .gitignore to prevent secret leaks ---
+    const gitignorePath = path.join(process.cwd(), '.gitignore');
+    const ignoreContent = "node_modules\n.env\n.env.local\n.monolith\n*.zip\n";
+    if (!fs.existsSync(gitignorePath)) {
+      fs.writeFileSync(gitignorePath, ignoreContent);
+    } else {
+      const existing = fs.readFileSync(gitignorePath, 'utf8');
+      if (!existing.includes('.monolith')) {
+      fs.appendFileSync(gitignorePath, `\n# Monolith PaaS\n${ignoreContent}`);
+    }
+  }
+
     console.log(`\n✅ Project initialized: ${projectName} (${projectId})`);
 
     if (buildDir !== '') {
@@ -254,7 +271,7 @@ onlyIncludeFiles = ['package.json', 'package-lock.json', ${requiredFolders.join(
 program
   .command('deploy')
   .description('Pack and deploy the current directory to the Monolith server')
-  .action(() => {
+  .action(async () => {
     const configDir = path.join(process.cwd(), '.monolith');
     const configFile = path.join(configDir, 'project.json');
 
@@ -264,6 +281,22 @@ program
     }
 
     const config = JSON.parse(fs.readFileSync(configFile));
+
+    // --- FIX 4: Check if project is GitHub connected ---
+  if (config.githubConnected) {
+  console.log('\n⚠️  WARNING: This project is connected to GitHub CI/CD.');
+  console.log('Running a manual deploy will temporarily overwrite the automated pipeline state.');
+  
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await new Promise(resolve => rl.question('Are you sure you want to deploy manually? (y/N): ', resolve));
+  rl.close();
+  
+  if (answer.toLowerCase() !== 'y') {
+    console.log('Deployment cancelled. Run `git push` to deploy via CI/CD instead.');
+    process.exit(0);
+  }
+}
+
     console.log('\n⬛ MONOLITH DEPLOYMENT INITIATED');
     console.log('Packing local directory (excluding node_modules & .git)...');
 
@@ -283,10 +316,14 @@ program
         const res = await axios.post(`${PLATFORM_URL}/api/deploy`, form, {
           headers: { ...form.getHeaders() }
         });
-        console.log('\n' + res.data.message);
+        console.log('\n' + res.data.message); 
       } catch (err) {
-        console.error('\n❌ Deployment failed:', err.response?.data?.error || err.message);
-      } finally {
+  if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+    console.error('\n❌ Can\'t reach the Monolith server — is it running? (Connection Refused)');
+  } else {
+    console.error('\n❌ Command failed:', err.response?.data?.error || err.message);
+  }
+}finally {
         // Always clean up the local zip file
         if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath); 
       }
@@ -426,10 +463,13 @@ program
       console.log(`\n📡 Fetching deployment logs for ${projectId}...\n`);
       const response = await axios.get(`${PLATFORM_URL}/api/logs?projectId=${projectId}`);
       console.log(response.data.logs);
-    } catch (error) {
-      console.error("❌ Failed to fetch logs:", error.response?.data?.error || error.message);
-      console.log('\n\x1b[33m💡 Need help? Run `monolith guide` for troubleshooting.\x1b[0m');
-    }
+    } catch (err) {
+  if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+    console.error('\n❌ Can\'t reach the Monolith server — is it running? (Connection Refused)');
+  } else {
+    console.error('\n❌ Command failed:', err.response?.data?.error || err.message);
+  }
+}
   });
 
 program.parse(process.argv);
