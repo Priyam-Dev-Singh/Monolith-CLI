@@ -38,23 +38,65 @@ const requireAuth = (req, res, next) => {
 };
 
 // --- MIDDLEWARE: Verify GitHub Webhook Cryptographic Signature ---
-const verifyGitHub = (req, res, next) => {
-  const signature = req.headers['x-hub-signature-256'] || '';
-  const hmac = crypto.createHmac('sha256', process.env.GITHUB_WEBHOOK_SECRET);
-  const digest = 'sha256=' + hmac.update(req.rawBody || '').digest('hex');
-
-  if (Buffer.byteLength(signature) !== Buffer.byteLength(digest) ||
-      !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest))) {
-    return res.status(403).send("Invalid signature");
+// --- GITHUB WEBHOOK SECURITY ---
+function verifyGitHub(req, res, next) {
+  const signature = req.headers['x-hub-signature-256'];
+  if (!signature) {
+    console.error('❌ Webhook blocked: No signature found.');
+    return res.status(403).send('No signature found');
   }
+
+  const secret = process.env.GITHUB_WEBHOOK_SECRET;
+  if (!secret) {
+    console.error('❌ Webhook secret missing from server .env file.');
+    return res.status(500).send('Server configuration error');
+  }
+
+  const hmac = crypto.createHmac('sha256', secret);
+  const digest = 'sha256=' + hmac.update(req.rawBody).digest('hex');
+
+  if (signature !== digest) {
+    console.error('❌ Webhook blocked: Invalid signature.');
+    return res.status(403).send('Invalid signature');
+  }
+
   next();
-};
-
-
-// SECURITY: Prevent Command Injection
-function isSafeIdentifier(s) {
-  return typeof s === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(s);
 }
+
+app.post('/api/webhook', verifyGitHub, async (req, res) => { // Added 'async'
+  const projectId = req.query.projectId;
+  if (!projectId) return res.status(400).send('Missing projectId parameter');
+
+  // 1. Acknowledge GitHub instantly so they don't timeout
+  res.status(200).send('Webhook received. Deployment starting in background.');
+
+  const repoUrl = req.body.repository?.clone_url;
+  if (!repoUrl) return console.error('No repository URL found in webhook payload.');
+
+  console.log('⬛ GITHUB PUSH DETECTED FOR: ' + projectId);
+  const extractDest = path.join(__dirname, 'staging', projectId);
+
+  try {
+    const gitFolderPath = path.join(extractDest, '.git');
+
+    // 2. Use non-blocking async execution for Git operations
+    if (fs.existsSync(gitFolderPath)) {
+      console.log('Pulling latest code from GitHub...');
+      await execAsync('git pull', { cwd: extractDest });
+    } else {
+      console.log('Wiping old CLI files and cloning fresh repository...');
+      if (fs.existsSync(extractDest)) fs.rmSync(extractDest, { recursive: true, force: true });
+      await execAsync(`git clone ${repoUrl} ${extractDest}`);
+    }
+    
+    // 3. Fire the Blue/Green deployment engine
+    // (We don't await this so it runs independently in the background)
+    buildAndDeploy(projectId, extractDest).catch(err => console.error('Build Error:', err));
+    
+  } catch (error) {
+    console.error('GitHub Deployment Failed:', error.message);
+  }
+});
 
 // INFRASTRUCTURE: Prevent Port Collisions
 async function getFreePort(min, max) {
