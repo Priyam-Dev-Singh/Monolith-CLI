@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 require('dotenv').config({ path: __dirname + '/.env' });
 const PLATFORM_URL = 'http://20.2.198.46:4000';
+const ora = require('ora');
 const axios = require('axios');
 const FormData = require('form-data');
 const fs = require('fs');
@@ -48,13 +49,15 @@ program
     const value = valueParts.join('='); // In case the value itself has an '=' sign
 
     try {
+      const spinner = ora('Updating secure vault...').start();
       const response = await axios.post(`${PLATFORM_URL}/api/env`, {
         projectId: projectId,
         envs: { [key]: value }
       });
+      spinner.succeed('✅ ENV variable was set successfully\n');
       console.log(`✅ ${response.data.message}`);
     } catch (error) {
-      console.error("❌ Failed to secure variable:", error.message);
+      spinner.fail("❌ Failed to secure variable: " + (error.response?.data?.error || error.message));
       console.log('\n\x1b[33m💡 Need help? Run `monolith guide` to view the platform architecture.\x1b[0m');
     }
   });
@@ -83,30 +86,42 @@ program
     const dbType = engines[choice.trim()] || 'postgres';
 
     console.log(`\nForging ${dbType.toUpperCase()} database '${dbName}' on the server...`);
-    try {
-      const response = await axios.post(`${PLATFORM_URL}/api/db`, { dbName, dbType });
-      const dbUrl = response.data.databaseUrl;
-      
-      console.log(`✅ ${response.data.message}`);
-      
-      // --- NEW: AUTO-LINKING ENGINE ---
-      const envKey = dbType === 'redis' ? 'REDIS_URL' : (dbType === 'mongodb' ? 'MONGO_URI' : 'DATABASE_URL');
-      console.log(`🔗 Auto-linking to the server vault as \x1b[36m${envKey}\x1b[0m...`);
-      
-      await axios.post(`${PLATFORM_URL}/api/env`, {
-        projectId: projectId,
-        envs: { [envKey]: dbUrl }
-      });
+    const spinner = ora(`Provisioning ${dbType} database (this takes a few seconds)...`).start();
+        let dbUrl = '';
+        let envKey = dbType === 'redis' ? 'REDIS_URL' : (dbType === 'mongodb' ? 'MONGO_URI' : 'DATABASE_URL');
 
-    console.log(`✅ Database linked successfully!`);
-    } catch (error) {
-      if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
-    console.error('\n❌ Can\'t reach the Monolith server — is it running? (Connection Refused)');
-  } else {
-    console.error("\n❌ Failed to create database:", error.response?.data?.error || error.message);
-  }
-      console.log('\n\x1b[33m💡 Need help? Run `monolith guide` to view the platform architecture.\x1b[0m');
-    }
+        // --- STEP 1: PROVISION THE DATABASE ---
+        try {
+          const response = await axios.post(`${PLATFORM_URL}/api/db`, { dbName, dbType });
+          dbUrl = response.data.databaseUrl;
+          
+          // UPDATE SPINNER TEXT WITHOUT STOPPING IT
+          spinner.text = `Engine online. Auto-linking to server vault as ${envKey}...`;
+        } catch (error) {
+          if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
+            spinner.fail('Can\'t reach the Monolith server — is it running? (Connection Refused)');
+          } else {
+            spinner.fail("Failed to create database: " + (error.response?.data?.error || error.message));
+          }
+          return; // Stop completely if DB creation fails
+        }
+
+        // --- STEP 2: AUTO-LINK TO VAULT ---
+        try {
+          await axios.post(`${PLATFORM_URL}/api/env`, {
+            projectId: projectId,
+            envs: { [envKey]: dbUrl }
+          });
+
+          // STOP SPINNER WITH TOTAL SUCCESS
+          spinner.succeed(`Database created and linked to vault successfully!`);
+          console.log(`\n🔗 Connection String: \x1b[36m${dbUrl}\x1b[0m`);
+        } catch (error) {
+          // STOP SPINNER WITH A WARNING (Partial Success)
+          spinner.warn(`Database was created, but auto-linking failed.`);
+          console.log(`\n🔗 Your Connection String is: \x1b[36m${dbUrl}\x1b[0m`);
+          console.log(`⚠️ Please link it manually by running: monolith env:set ${envKey} "<url>"`);
+        }
   });
 
 program
@@ -507,16 +522,23 @@ program
     }
 
     console.log('\n🧨 Initiating tactical teardown...');
-    try {
-      axios.defaults.headers.common['x-api-key'] = process.env.PLATFORM_API_KEY;
-      const res = await axios.post(`${PLATFORM_URL}/api/destroy`, { projectId: config.id });
-      console.log('\n✅ 🗑️  ' + res.data.message);
-      
-      fs.rmSync(configDir, { recursive: true, force: true });
-      console.log('🧹 Local .monolith config removed. The project is offline.');
-    } catch (err) {
-      console.error('\n❌ Teardown failed:', err.response?.data?.error || err.message);
-    }
+        
+        // 1. START THE SPINNER HERE
+        const spinner = ora('Eradicating project from Azure...').start(); 
+        
+        try {
+          axios.defaults.headers.common['x-api-key'] = process.env.PLATFORM_API_KEY;
+          const res = await axios.post(`${PLATFORM_URL}/api/destroy`, { projectId: config.id });
+          
+          // 2. STOP WITH SUCCESS HERE (Replaces your old console.log)
+          spinner.succeed('🗑️  ' + res.data.message); 
+          
+          fs.rmSync(configDir, { recursive: true, force: true });
+          console.log('🧹 Local .monolith config removed. The project is offline.');
+        } catch (err) {
+          // 3. STOP WITH FAIL HERE (Replaces your old console.error)
+          spinner.fail('Teardown failed: ' + (err.response?.data?.error || err.message)); 
+        }
   });
 
 program
@@ -556,26 +578,27 @@ program
 
 program
   .command('logs')
-  .description('View the latest deployment logs for your project')
+  .description('Stream live application logs directly from the server')
   .action(async () => {
-    const configPath = path.join(process.cwd(), '.monolith', 'project.json');
-    if (!fs.existsSync(configPath)) {
-      console.error("❌ No project found. Run 'monolith init ' first.");
-      return;
-    }
-    const projectId = JSON.parse(fs.readFileSync(configPath)).id;
+    const configDir = path.join(process.cwd(), '.monolith');
+    const configFile = path.join(configDir, 'project.json');
+    if (!fs.existsSync(configFile)) return console.error("\n❌ Not a Monolith project.");
+    const config = JSON.parse(fs.readFileSync(configFile));
 
+    console.log('\n📡 Connecting to live Docker stream... (Press Ctrl+C to exit)\n');
+    
     try {
-      console.log(`\n📡 Fetching deployment logs for ${projectId}...\n`);
-      const response = await axios.get(`${PLATFORM_URL}/api/logs?projectId=${projectId}`);
-      console.log(response.data.logs);
+      const res = await axios({
+        method: 'get',
+        url: `${PLATFORM_URL}/api/logs/stream?projectId=${config.id}`,
+        headers: { 'x-api-key': process.env.PLATFORM_API_KEY },
+        responseType: 'stream' // Tell Axios to keep the connection open
+      });
+
+      res.data.on('data', chunk => process.stdout.write(chunk));
     } catch (err) {
-  if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
-    console.error('\n❌ Can\'t reach the Monolith server — is it running? (Connection Refused)');
-  } else {
-    console.error('\n❌ Command failed:', err.response?.data?.error || err.message);
-  }
-}
+      console.error('❌ Log stream failed.');
+    }
   });
 
 program.parse(process.argv);

@@ -3,7 +3,7 @@ require('dotenv').config(); // <-- Loads the server's .env file
 const crypto = require('crypto');
 const multer = require('multer');
 const util = require('util');
-const { exec } = require('child_process');
+const { exec, spawn} = require('child_process');
 const execAsync = util.promisify(exec);
 const fs = require('fs');
 const path = require('path');
@@ -293,23 +293,35 @@ app.post('/api/db', requireAuth, async (req, res) => {
   }
 });
 
-app.get('/api/logs', requireAuth, (req, res) => {
-  const { projectId } = req.query;
-  if (!projectId) return res.status(400).json({ error: "Project ID missing." });
+// --- LIVE LOG STREAMING ENGINE ---
+app.get('/api/logs/stream', requireAuth, async (req, res) => {
+  const projectId = req.query.projectId;
+  if (!isValidProjectId(projectId)) return res.status(400).send('Invalid projectId');
 
-  // Look for the project's log file in the staging directory
-  const logFilePath = path.join(__dirname, 'staging', projectId, 'deploy.log');
+  try {
+    // Find the currently active container for this project
+    const { stdout } = await execAsync(`docker ps -q -f "name=^live_${projectId}_"`);
+    const containerId = stdout.trim().split('\n')[0];
 
-  if (fs.existsSync(logFilePath)) {
-    // Read the last 2000 characters to keep terminal output clean
-    const logData = fs.readFileSync(logFilePath, 'utf8');
-    const truncatedLogs = logData.length > 2000
-        ? '... [TRUNCATED] ...\n' + logData.slice(-2000)
-        : logData;
+    if (!containerId) {
+      return res.status(404).send('❌ No running container found for this project.\n');
+    }
 
-    res.json({ logs: truncatedLogs });
-  } else {
-    res.json({ logs: `⬛ No recent deployment logs found for ${projectId}. Run a deployment first.` });
+    // Set headers for a continuous stream
+    res.setHeader('Content-Type', 'text/plain');
+    res.setHeader('Transfer-Encoding', 'chunked');
+
+    // Spawn a process that attaches directly to the Docker daemon (-f means "follow" in real-time)
+    const child = spawn('docker', ['logs', '-f', '--tail', '100', containerId]);
+    
+    child.stdout.on('data', data => res.write(data));
+    child.stderr.on('data', data => res.write(data));
+
+    // If the user hits Ctrl+C on their laptop, close the stream gracefully on the server
+    req.on('close', () => child.kill());
+
+  } catch (err) {
+    res.status(500).send('Failed to fetch logs.\n');
   }
 });
 
