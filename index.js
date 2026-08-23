@@ -204,6 +204,32 @@ program
 
     const projectId = `proj_${crypto.randomBytes(16).toString('hex')}`;
     const config = { name: projectName, id: projectId };
+    
+    // --- DATABASE SYNC PROTOCOL ---
+    const DASHBOARD_URL = process.env.DASHBOARD_URL || 'http://localhost:3000';
+    const cliToken = process.env.MONOLITH_TOKEN;
+
+    if (!cliToken) {
+      console.error('\n❌ FATAL: No MONOLITH_TOKEN found in .env.');
+      console.error('Generate a token in your web dashboard and add it to your CLI .env file.');
+      process.exit(1);
+    }
+
+    const syncSpinner = ora('Syncing with Control Plane...').start();
+    try {
+      await axios.post(`${DASHBOARD_URL}/api/cli/init`, {
+        token: cliToken,
+        projectId: projectId,
+        projectName: projectName,
+        buildDirectory: buildDir || '/'
+      });
+      syncSpinner.succeed('Project registered in Dashboard Matrix.');
+    } catch (error) {
+      syncSpinner.fail('Failed to sync with Dashboard.');
+      console.error(error.response?.data?.error || error.message);
+      process.exit(1); // Abort completely if database sync fails
+    }
+    // ------------------------------
 
     fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
     
