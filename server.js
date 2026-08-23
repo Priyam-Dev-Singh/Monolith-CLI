@@ -260,6 +260,51 @@ app.post('/api/webhook', verifyGitHub, (req, res) => {
   }
 });
 
+// --- ROUTE 2.5: THE NEXT.JS DASHBOARD TRIGGER ---
+app.post('/api/dashboard/deploy', async (req, res) => {
+  const { secret, projectId, repoUrl, branch, rootDirectory } = req.body;
+
+  // 1. Authenticate using the exact same API key your CLI uses
+  if (secret !== process.env.PLATFORM_API_KEY) {
+    return res.status(403).json({ error: "Forbidden: Invalid Secret" });
+  }
+
+  if (!projectId || !repoUrl) {
+    return res.status(400).json({ error: 'Missing projectId or repoUrl' });
+  }
+
+  console.log(`\n⬛ DASHBOARD DEPLOYMENT INITIATED: ${projectId}`);
+  console.log(`--> Target: ${repoUrl} (Branch: ${branch})`);
+  console.log(`--> Path: ${rootDirectory}`);
+
+  // 2. Acknowledge immediately so Next.js doesn't hang
+  res.status(202).json({ message: "Deployment signal accepted. Building..." });
+
+  const extractDest = path.join(__dirname, 'staging', projectId);
+
+  try {
+    // 3. Wipe old data and clone fresh from GitHub
+    if (fs.existsSync(extractDest)) fs.rmSync(extractDest, { recursive: true, force: true });
+    
+    console.log('Cloning repository...');
+    const branchFlag = branch && branch !== 'main' ? `-b ${branch}` : '';
+    await execAsync(`git clone ${branchFlag} ${repoUrl} ${extractDest}`);
+
+    // 4. THE GENIUS MOVE: We dynamically create a monolith.json file
+    // so your existing buildAndDeploy function handles the sub-directory naturally!
+    if (rootDirectory && rootDirectory !== '/') {
+      const configPath = path.join(extractDest, 'monolith.json');
+      fs.writeFileSync(configPath, JSON.stringify({ buildDirectory: rootDirectory }));
+    }
+
+    // 5. Fire your existing Blue/Green Engine in the background
+    buildAndDeploy(projectId, extractDest).catch(err => console.error('Build Error:', err));
+
+  } catch (error) {
+    console.error('Dashboard Deployment Failed:', error.message);
+  }
+});
+
 // --- ROUTE 3: SECRETS VAULT ---
 app.post('/api/env', requireAuth, (req, res) => {
   const { projectId, envs } = req.body;
@@ -527,6 +572,8 @@ app.post('/api/db/destroy', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to destroy database. It may not exist.' });
   }
 });
+
+
 
 const PORT = 4000;
 app.listen(PORT, () => console.log('🛡️  Monolith Receiver listening on port ' + PORT));
