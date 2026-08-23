@@ -10,6 +10,7 @@ const path = require('path');
 const { program } = require('commander');
 const readline = require('readline');
 const crypto = require('crypto');
+const os = require('os');
 
 axios.defaults.timeout = 300000; // 5-minute timeout for heavy deployments
 
@@ -30,10 +31,44 @@ const askHidden = (query) => new Promise((resolve) => {
   };
 });
 
+// --- GLOBAL AUTH RESOLVER ---
+const getGlobalAuth = () => {
+  const globalAuthPath = path.join(os.homedir(), '.monolith', 'auth.json');
+  if (fs.existsSync(globalAuthPath)) {
+    return JSON.parse(fs.readFileSync(globalAuthPath, 'utf8'));
+  }
+  return { token: process.env.MONOLITH_TOKEN, dashboardUrl: process.env.DASHBOARD_URL };
+};
+
 program
   .name('monolith')
   .description('Monolith Infrastructure Command Line Interface')
   .version('1.0.0');
+
+program
+  .command('login')
+  .description('Authenticate your CLI with the Monolith Control Plane')
+  .requiredOption('-t, --token <string>', 'Your Personal Access Token')
+  .option('-u, --url <string>', 'Your Dashboard URL', 'http://localhost:3000')
+  .action((options) => {
+    const globalDir = path.join(os.homedir(), '.monolith');
+    if (!fs.existsSync(globalDir)) fs.mkdirSync(globalDir, { recursive: true });
+
+    const authConfig = {
+      token: options.token,
+      dashboardUrl: options.url
+    };
+
+    fs.writeFileSync(
+      path.join(globalDir, 'auth.json'),
+      JSON.stringify(authConfig, null, 2),
+      { mode: 0o600 } // Secure file permissions
+    );
+
+    console.log(`\n✅ Operator authenticated successfully.`);
+    console.log(`📡 Connected to Control Plane at: ${options.url}`);
+    console.log(`🔐 Credentials secured in ${globalDir}/auth.json\n`);
+  });
 
 program
   .command('env:set <keyValue>')
@@ -206,15 +241,15 @@ program
     const config = { name: projectName, id: projectId };
     
     // --- DATABASE SYNC PROTOCOL ---
-    const DASHBOARD_URL = process.env.DASHBOARD_URL || 'http://localhost:3000';
-    const cliToken = process.env.MONOLITH_TOKEN;
+    const auth = getGlobalAuth();
+    const DASHBOARD_URL = auth.dashboardUrl || 'http://localhost:3000';
+    const cliToken = auth.token;
 
     if (!cliToken) {
-      console.error('\n❌ FATAL: No MONOLITH_TOKEN found in .env.');
-      console.error('Generate a token in your web dashboard and add it to your CLI .env file.');
+      console.error('\n❌ FATAL: Operator unauthenticated.');
+      console.error('Run: monolith login --token <your_token>');
       process.exit(1);
     }
-
     const syncSpinner = ora('Syncing with Control Plane...').start();
     try {
       await axios.post(`${DASHBOARD_URL}/api/cli/init`, {
