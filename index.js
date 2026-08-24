@@ -384,49 +384,91 @@ program
 
     const config = JSON.parse(fs.readFileSync(configFile));
 
-    // --- FIX 4: Check if project is GitHub connected ---
-  if (config.githubConnected) {
-  console.log('\n⚠️  WARNING: This project is connected to GitHub CI/CD.');
-  console.log('Running a manual deploy will temporarily overwrite the automated pipeline state.');
-  
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await new Promise(resolve => rl.question('Are you sure you want to deploy manually? (y/N): ', resolve));
-  rl.close();
-  
-  if (answer.toLowerCase() !== 'y') {
-    console.log('Deployment cancelled. Run `git push` to deploy via CI/CD instead.');
-    process.exit(0);
-  }
-}
+    if (config.githubConnected) {
+      console.log('\n⚠️  WARNING: This project is connected to GitHub CI/CD.');
+      console.log('Running a manual deploy will temporarily overwrite the automated pipeline state.');
+      
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await new Promise(resolve => rl.question('Are you sure you want to deploy manually? (y/N): ', resolve));
+      rl.close();
+      
+      if (answer.toLowerCase() !== 'y') {
+        console.log('Deployment cancelled. Run `git push` to deploy via CI/CD instead.');
+        process.exit(0);
+      }
+    }
 
     console.log('\n⬛ MONOLITH DEPLOYMENT INITIATED');
+
+    // --- DYNAMIC TARGET ACQUISITION ---
+    const auth = getGlobalAuth();
+    const dashboardUrl = auth.dashboardUrl || 'http://localhost:3000';
+    const cliToken = auth.token;
+
+    if (!cliToken) {
+      console.error('\n❌ FATAL: Operator unauthenticated. Run: monolith login --token <your_token>');
+      process.exit(1);
+    }
+
+    const targetSpinner = ora('Acquiring hardware coordinates from Control Plane...').start();
+    let TARGET_URL = '';
+    let TARGET_API_KEY = '';
+
+    try {
+      const res = await axios.post(`${dashboardUrl}/api/cli/target`, {
+        token: cliToken,
+        projectId: config.id
+      });
+
+      const { targetServer } = res.data;
+
+      if (!targetServer) {
+        targetSpinner.fail('❌ Workload is untethered. No target hardware assigned in the Matrix.');
+        process.exit(1);
+      }
+
+      // Reconstruct the Execution Node URL assuming port 4000
+      TARGET_URL = `http://${targetServer.ipAddress}:4000`;
+      TARGET_API_KEY = targetServer.apiKey;
+
+      targetSpinner.succeed(`Coordinates locked: ${targetServer.name} [${TARGET_URL}]`);
+    } catch (error) {
+      targetSpinner.fail('Failed to locate hardware coordinates.');
+      console.error(error.response?.data?.error || error.message);
+      process.exit(1);
+    }
+    // ---------------------------------------
+
     console.log('Packing local directory (excluding node_modules & .git)...');
 
     const zipPath = path.join(process.cwd(), `${config.id}.zip`);
     const output = fs.createWriteStream(zipPath);
-    const archive = new ZipArchive({zlib:{level:9}}); // Max compression
+    const archive = new ZipArchive({zlib:{level:9}});
 
     output.on('close', async () => {
       console.log(`📦 Packed ${archive.pointer()} total bytes.`);
-      console.log('🚀 Uploading payload to Azure Server...(this may take some time)');
+      console.log('🚀 Uploading payload to Execution Node...');
       
       const form = new FormData();
       form.append('projectId', config.id);
       form.append('payload', fs.createReadStream(zipPath));
 
       try {
-        const res = await axios.post(`${PLATFORM_URL}/api/deploy`, form, {
-          headers: { ...form.getHeaders() }
+        // OVERRIDE: Fire payload to the dynamic TARGET_URL and inject the specific node's API Key
+        const res = await axios.post(`${TARGET_URL}/api/deploy`, form, {
+          headers: { 
+            ...form.getHeaders(),
+            'x-api-key': TARGET_API_KEY 
+          }
         });
         console.log('\n' + res.data.message); 
       } catch (err) {
-  if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
-    console.error('\n❌ Can\'t reach the Monolith server — is it running? (Connection Refused)');
-  } else {
-    console.error('\n❌ Command failed:', err.response?.data?.error || err.message);
-  }
-}finally {
-        // Always clean up the local zip file
+        if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
+          console.error(`\n❌ Can't reach the target node at ${TARGET_URL} — is it running?`);
+        } else {
+          console.error('\n❌ Command failed:', err.response?.data?.error || err.message);
+        }
+      } finally {
         if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath); 
       }
     });
@@ -434,32 +476,29 @@ program
     archive.on('error', (err) => { throw err; });
     archive.pipe(output);
 
-    // --- THE FIX: Smart Payload Targeting ---
-        const monolithConfigPath = path.join(process.cwd(), 'monolith.json');
-        let targetDir = '';
-        
-        if (fs.existsSync(monolithConfigPath)) {
-          const mConfig = JSON.parse(fs.readFileSync(monolithConfigPath, 'utf8'));
-          targetDir = mConfig.buildDirectory || '';
-        }
+    const monolithConfigPath = path.join(process.cwd(), 'monolith.json');
+    let targetDir = '';
+    
+    if (fs.existsSync(monolithConfigPath)) {
+      const mConfig = JSON.parse(fs.readFileSync(monolithConfigPath, 'utf8'));
+      targetDir = mConfig.buildDirectory || '';
+    }
 
-        if (targetDir && targetDir !== '') {
-          // If a specific build directory exists, ONLY pack that folder and the config
-          archive.glob('**/*', {
-            cwd: path.join(process.cwd(), targetDir),
-            ignore: ['**/node_modules/**', '**/.git/**', '**/.env']
-          }, { prefix: targetDir }); // Preserves the folder name in the zip
-          
-          archive.file(monolithConfigPath, { name: 'monolith.json' });
-        } else {
-          // If it's a root project, pack everything except standard bloat
-          archive.glob('**/*', {
-            cwd: process.cwd(),
-            ignore: ['**/node_modules/**', '**/.git/**', '**/.env', '**/*.zip', '**/.monolith/**']
-          });
-        }
-        
-        archive.finalize();
+    if (targetDir && targetDir !== '') {
+      archive.glob('**/*', {
+        cwd: path.join(process.cwd(), targetDir),
+        ignore: ['**/node_modules/**', '**/.git/**', '**/.env']
+      }, { prefix: targetDir });
+      
+      archive.file(monolithConfigPath, { name: 'monolith.json' });
+    } else {
+      archive.glob('**/*', {
+        cwd: process.cwd(),
+        ignore: ['**/node_modules/**', '**/.git/**', '**/.env', '**/*.zip', '**/.monolith/**']
+      });
+    }
+    
+    archive.finalize();
   });
 
 program
@@ -634,14 +673,16 @@ program
   .command('link')
   .description('Tether current directory to a deployed Monolith workload')
   .action(async () => {
-    const configPath = path.join(os.homedir(), '.monolith', 'config.json');
+    // --- FIX: UNIFIED AUTH RESOLVER ---
+    const auth = getGlobalAuth();
+    const dashboardUrl = auth.dashboardUrl || 'http://localhost:3000';
     
-    if (!fs.existsSync(configPath)) {
+    if (!auth || !auth.token) {
       console.log("\n❌ Unauthorized Operator. Run 'monolith login --token <token>' first.");
       process.exit(1);
     }
     
-    const { token } = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const token = auth.token;
     
     // Initialize the tactical spinner
     const spinner = ora({
@@ -650,7 +691,8 @@ program
     }).start();
     
     try {
-      const response = await fetch(`${DASHBOARD_URL}/api/cli/projects`, {
+      // --- FIX: DYNAMIC DASHBOARD URL ---
+      const response = await fetch(`${dashboardUrl}/api/cli/projects`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token })
@@ -696,9 +738,10 @@ program
           fs.mkdirSync(projectDir);
         }
 
+        // --- ALIGNMENT: Save as 'id' to maintain parity with 'init' ---
         fs.writeFileSync(
           path.join(projectDir, 'project.json'), 
-          JSON.stringify({ projectId: selected.id }, null, 2)
+          JSON.stringify({ id: selected.id, name: selected.name }, null, 2)
         );
 
         console.log(`\n✅ TETHER ESTABLISHED: Local payload locked to [${selected.name}]`);
