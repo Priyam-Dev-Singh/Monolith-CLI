@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 require('dotenv').config({ path: __dirname + '/.env' });
 const PLATFORM_URL = 'http://20.2.198.46:4000';
+const DASHBOARD_URL = 'http://localhost:3000';
 const ora = require('ora');
 const axios = require('axios');
 const FormData = require('form-data');
@@ -626,6 +627,87 @@ program
       }
     } catch (err) {
       spinner.fail('Teardown failed: ' + (err.response?.data?.error || err.message));
+    }
+  });
+
+program
+  .command('link')
+  .description('Tether current directory to a deployed Monolith workload')
+  .action(async () => {
+    const configPath = path.join(os.homedir(), '.monolith', 'config.json');
+    
+    if (!fs.existsSync(configPath)) {
+      console.log("\n❌ Unauthorized Operator. Run 'monolith login --token <token>' first.");
+      process.exit(1);
+    }
+    
+    const { token } = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    
+    // Initialize the tactical spinner
+    const spinner = ora({
+      text: '📡 Interfacing with Control Plane...',
+      color: 'green'
+    }).start();
+    
+    try {
+      const response = await fetch(`${DASHBOARD_URL}/api/cli/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token })
+      });
+
+      if (!response.ok) {
+        spinner.fail('❌ Authorization rejected by Control Plane.');
+        process.exit(1);
+      }
+
+      const { projects } = await response.json();
+
+      if (!projects || projects.length === 0) {
+        spinner.warn('⚠️ No workloads found in the Matrix. Initialize one via the Web Dashboard first.');
+        process.exit(0);
+      }
+
+      spinner.stop();
+      console.log("\n⬛ AVAILABLE WORKLOADS:");
+      projects.forEach((p, index) => {
+        console.log(`[${index + 1}] ${p.name} -> 🖥️  ${p.serverName} (${p.serverIp})`);
+      });
+
+      // Interactive prompt
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+      });
+
+      rl.question('\nTarget workload number to link: ', (answer) => {
+        const index = parseInt(answer.trim()) - 1;
+        const selected = projects[index];
+
+        if (isNaN(index) || !selected) {
+          console.log("\n❌ Invalid coordinates. Aborting sequence.");
+          rl.close();
+          process.exit(1);
+        }
+
+        // Establish the Local State
+        const projectDir = path.join(process.cwd(), '.monolith');
+        if (!fs.existsSync(projectDir)) {
+          fs.mkdirSync(projectDir);
+        }
+
+        fs.writeFileSync(
+          path.join(projectDir, 'project.json'), 
+          JSON.stringify({ projectId: selected.id }, null, 2)
+        );
+
+        console.log(`\n✅ TETHER ESTABLISHED: Local payload locked to [${selected.name}]`);
+        rl.close();
+      });
+
+    } catch (error) {
+      spinner.fail(`❌ Connection failure: ${error.message}`);
+      process.exit(1);
     }
   });
 
