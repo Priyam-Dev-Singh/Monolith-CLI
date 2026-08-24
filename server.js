@@ -262,12 +262,7 @@ app.post('/api/webhook', verifyGitHub, (req, res) => {
 
 // --- ROUTE 2.5: THE NEXT.JS DASHBOARD TRIGGER ---
 app.post('/api/dashboard/deploy', async (req, res) => {
-  const { secret, projectId, repoUrl, branch, rootDirectory } = req.body;
-
-  // 1. Authenticate using the exact same API key your CLI uses
-  if (secret !== process.env.PLATFORM_API_KEY) {
-    return res.status(403).json({ error: "Forbidden: Invalid Secret" });
-  }
+  const { projectId, repoUrl, branch, rootDirectory } = req.body;
 
   if (!projectId || !repoUrl) {
     return res.status(400).json({ error: 'Missing projectId or repoUrl' });
