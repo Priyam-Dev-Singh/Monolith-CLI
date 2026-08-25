@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 require('dotenv').config({ path: __dirname + '/.env' });
-const PLATFORM_URL = 'http://20.2.198.46:4000';
 const DASHBOARD_URL = 'http://localhost:3000';
 const ora = require('ora');
 const axios = require('axios');
@@ -103,26 +102,32 @@ program
   .command('env:set <keyValue>')
   .description('Set an environment variable (e.g., monolith env set API_KEY=123)')
   .action(async (keyValue) => {
-
-    
     const configPath = path.join(process.cwd(), '.monolith', 'project.json');
     if (!fs.existsSync(configPath)) return console.error("❌ Run 'monolith init' first.");
     
-    const projectId = JSON.parse(fs.readFileSync(configPath)).id;
+    const config = JSON.parse(fs.readFileSync(configPath));
+    const activeProjectId = config.id || config.projectId;
+    
     const [key, ...valueParts] = keyValue.split('=');
-    const value = valueParts.join('='); // In case the value itself has an '=' sign
+    const value = valueParts.join('='); 
 
+    const spinner = ora('Updating secure vault...').start();
     try {
-      const spinner = ora('Updating secure vault...').start();
-      const response = await axios.post(`${PLATFORM_URL}/api/env`, {
-        projectId: projectId,
+      // 1. Acquire Target
+      const target = await resolveTarget(activeProjectId);
+      
+      // 2. Fire Payload with specific API Key
+      const response = await axios.post(`${target.url}/api/env`, {
+        projectId: activeProjectId,
         envs: { [key]: value }
+      }, {
+        headers: { 'x-api-key': target.apiKey }
       });
+      
       spinner.succeed('✅ ENV variable was set successfully\n');
       console.log(`✅ ${response.data.message}`);
     } catch (error) {
       spinner.fail("❌ Failed to secure variable: " + (error.response?.data?.error || error.message));
-      console.log('\n\x1b[33m💡 Need help? Run `monolith guide` to view the platform architecture.\x1b[0m');
     }
   });
 
@@ -882,24 +887,28 @@ program
   .command('logs')
   .description('Stream live application logs directly from the server')
   .action(async () => {
-    const configDir = path.join(process.cwd(), '.monolith');
-    const configFile = path.join(configDir, 'project.json');
-    if (!fs.existsSync(configFile)) return console.error("\n❌ Not a Monolith project.");
-    const config = JSON.parse(fs.readFileSync(configFile));
+    const configPath = path.join(process.cwd(), '.monolith', 'project.json');
+    if (!fs.existsSync(configPath)) return console.error("\n❌ Not a Monolith project.");
+    
+    const config = JSON.parse(fs.readFileSync(configPath));
+    const activeProjectId = config.id || config.projectId;
 
-    console.log('\n📡 Connecting to live Docker stream... (Press Ctrl+C to exit)\n');
+    console.log('\n📡 Acquiring telemetry stream coordinates...');
     
     try {
+      const target = await resolveTarget(activeProjectId);
+      console.log(`🔗 Target locked. Connecting to live Docker stream at ${target.url}... (Press Ctrl+C to exit)\n`);
+
       const res = await axios({
         method: 'get',
-        url: `${PLATFORM_URL}/api/logs/stream?projectId=${config.id}`,
-        headers: { 'x-api-key': process.env.PLATFORM_API_KEY },
-        responseType: 'stream' // Tell Axios to keep the connection open
+        url: `${target.url}/api/logs/stream?projectId=${activeProjectId}`,
+        headers: { 'x-api-key': target.apiKey },
+        responseType: 'stream' 
       });
 
       res.data.on('data', chunk => process.stdout.write(chunk));
     } catch (err) {
-      console.error('❌ Log stream failed.');
+      console.error('\n❌ Log stream failed:', err.message);
     }
   });
 
