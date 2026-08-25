@@ -41,6 +41,34 @@ const getGlobalAuth = () => {
   return { token: process.env.MONOLITH_TOKEN, dashboardUrl: process.env.DASHBOARD_URL };
 };
 
+// --- DYNAMIC TARGET RESOLVER ---
+const resolveTarget = async (projectId) => {
+  const auth = getGlobalAuth();
+  if (!auth || !auth.token) {
+    throw new Error("Unauthorized Operator. Run 'monolith login' first.");
+  }
+  const dashboardUrl = auth.dashboardUrl || 'http://localhost:3000';
+
+  try {
+    const res = await axios.post(`${dashboardUrl}/api/cli/target`, {
+      token: auth.token,
+      projectId: projectId
+    });
+
+    const { targetServer } = res.data;
+    if (!targetServer) {
+      throw new Error("Workload untethered. No target hardware assigned in the Matrix.");
+    }
+
+    return {
+      url: `http://${targetServer.ipAddress}:4000`,
+      apiKey: targetServer.apiKey
+    };
+  } catch (error) {
+    throw new Error(error.response?.data?.error || "Failed to locate hardware coordinates.");
+  }
+};
+
 program
   .name('monolith')
   .description('Monolith Infrastructure Command Line Interface')

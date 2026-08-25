@@ -14,6 +14,8 @@ if (!process.env.PLATFORM_API_KEY || !process.env.GITHUB_WEBHOOK_SECRET) {
   process.exit(1);
 }
 
+const serverIp = process.env.SERVER_IP || '127.0.0.1';
+
 const app = express();
 app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 const upload = multer({ dest: 'uploads/' });
@@ -341,26 +343,26 @@ app.post('/api/db', requireAuth, async (req, res) => {
         envContent = `POSTGRES_PASSWORD=${password}\nPOSTGRES_USER=monolith\nPOSTGRES_DB=${dbName}`;
         // Added: --restart unless-stopped, --env-file, and -v (Volume Persistence)
         dockerCmd = `docker run --name ${containerName} --restart unless-stopped --env-file ${envFilePath} -v ${containerName}_data:/var/lib/postgresql/data -p ${port}:5432 -d postgres:15-alpine`;
-        connectionString = `postgresql://monolith:${password}@20.2.198.46:${port}/${dbName}`;
+        connectionString = `postgresql://monolith:${password}@${serverIp}:${port}/${dbName}`;
         break;
       case 'mysql':
         port = await getFreePort(43300, 44000);
         envContent = `MYSQL_ROOT_PASSWORD=${password}\nMYSQL_DATABASE=${dbName}`;
         dockerCmd = `docker run --name ${containerName} --restart unless-stopped --env-file ${envFilePath} -v ${containerName}_data:/var/lib/mysql -p ${port}:3306 -d mysql:8.0`;
-        connectionString = `mysql://root:${password}@20.2.198.46:${port}/${dbName}`;
+        connectionString = `mysql://root:${password}@${serverIp}:${port}/${dbName}`;
         break;
       case 'mongodb':
         port = await getFreePort(37017, 38000);
         envContent = `MONGO_INITDB_ROOT_USERNAME=admin\nMONGO_INITDB_ROOT_PASSWORD=${password}`;
         dockerCmd = `docker run --name ${containerName} --restart unless-stopped --env-file ${envFilePath} -v ${containerName}_data:/data/db -p ${port}:27017 -d mongo:6`;
-        connectionString = `mongodb://admin:${password}@20.2.198.46:${port}/?authSource=admin`;
+        connectionString = `mongodb://admin:${password}@${serverIp}:${port}/?authSource=admin`;
         break;
       case 'redis':
         port = await getFreePort(60000, 61000);
         envContent = `REDIS_PASSWORD=${password}`;
         // Redis requires a custom command to ingest the password from the environment securely
         dockerCmd = `docker run --name ${containerName} --restart unless-stopped --env-file ${envFilePath} -v ${containerName}_data:/data -p ${port}:6379 -d redis:7-alpine sh -c 'exec redis-server --requirepass "$REDIS_PASSWORD"'`;
-        connectionString = `redis://default:${password}@20.2.198.46:${port}`;
+        connectionString = `redis://default:${password}@${serverIp}:${port}`;
         break;
       default:
         return res.status(400).json({ error: "Unsupported database engine." });
