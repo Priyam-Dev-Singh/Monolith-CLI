@@ -137,7 +137,8 @@ program
   .action(async (dbName) => {
     const configPath = path.join(process.cwd(), '.monolith', 'project.json');
     if (!fs.existsSync(configPath)) return console.error("❌ Run 'monolith init' first.");
-    const projectId = JSON.parse(fs.readFileSync(configPath)).id;
+    const config = JSON.parse(fs.readFileSync(configPath));
+    const activeProjectId = config.id || config.projectId;
 
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const askQuestion = (query) => new Promise((resolve) => rl.question(query, resolve));
@@ -154,43 +155,49 @@ program
     const engines = { '1': 'postgres', '2': 'mysql', '3': 'redis', '4': 'mongodb' };
     const dbType = engines[choice.trim()] || 'postgres';
 
-    console.log(`\nForging ${dbType.toUpperCase()} database '${dbName}' on the server...`);
-    const spinner = ora(`Provisioning ${dbType} database (this takes a few seconds)...`).start();
-        let dbUrl = '';
-        let envKey = dbType === 'redis' ? 'REDIS_URL' : (dbType === 'mongodb' ? 'MONGO_URI' : 'DATABASE_URL');
+    console.log(`\nForging ${dbType.toUpperCase()} database '${dbName}'...`);
+    const spinner = ora(`Acquiring target hardware...`).start();
+    
+    let target;
+    try {
+       target = await resolveTarget(activeProjectId);
+       spinner.text = `Provisioning ${dbType} database on ${target.url}...`;
+    } catch (error) {
+       spinner.fail(error.message);
+       return;
+    }
 
-        // --- STEP 1: PROVISION THE DATABASE ---
-        try {
-          const response = await axios.post(`${PLATFORM_URL}/api/db`, { dbName, dbType });
-          dbUrl = response.data.databaseUrl;
-          
-          // UPDATE SPINNER TEXT WITHOUT STOPPING IT
-          spinner.text = `Engine online. Auto-linking to server vault as ${envKey}...`;
-        } catch (error) {
-          if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT') {
-            spinner.fail('Can\'t reach the Monolith server — is it running? (Connection Refused)');
-          } else {
-            spinner.fail("Failed to create database: " + (error.response?.data?.error || error.message));
-          }
-          return; // Stop completely if DB creation fails
-        }
+    let dbUrl = '';
+    let envKey = dbType === 'redis' ? 'REDIS_URL' : (dbType === 'mongodb' ? 'MONGO_URI' : 'DATABASE_URL');
 
-        // --- STEP 2: AUTO-LINK TO VAULT ---
-        try {
-          await axios.post(`${PLATFORM_URL}/api/env`, {
-            projectId: projectId,
-            envs: { [envKey]: dbUrl }
-          });
+    // --- PROVISION THE DATABASE ---
+    try {
+      const response = await axios.post(`${target.url}/api/db`, { dbName, dbType }, {
+        headers: { 'x-api-key': target.apiKey }
+      });
+      dbUrl = response.data.databaseUrl;
+      spinner.text = `Engine online. Auto-linking to server vault as ${envKey}...`;
+    } catch (error) {
+      spinner.fail("Failed to create database: " + (error.response?.data?.error || error.message));
+      return;
+    }
 
-          // STOP SPINNER WITH TOTAL SUCCESS
-          spinner.succeed(`Database created and linked to vault successfully!`);
-          console.log(`\n🔗 Connection String: \x1b[36m${dbUrl}\x1b[0m`);
-        } catch (error) {
-          // STOP SPINNER WITH A WARNING (Partial Success)
-          spinner.warn(`Database was created, but auto-linking failed.`);
-          console.log(`\n🔗 Your Connection String is: \x1b[36m${dbUrl}\x1b[0m`);
-          console.log(`⚠️ Please link it manually by running: monolith env:set ${envKey} "<url>"`);
-        }
+    // --- AUTO-LINK TO VAULT ---
+    try {
+      await axios.post(`${target.url}/api/env`, {
+        projectId: activeProjectId,
+        envs: { [envKey]: dbUrl }
+      }, {
+        headers: { 'x-api-key': target.apiKey }
+      });
+
+      spinner.succeed(`Database created and linked to vault successfully!`);
+      console.log(`\n🔗 Connection String: \x1b[36m${dbUrl}\x1b[0m`);
+    } catch (error) {
+      spinner.warn(`Database was created, but auto-linking failed.`);
+      console.log(`\n🔗 Your Connection String is: \x1b[36m${dbUrl}\x1b[0m`);
+      console.log(`⚠️ Please link it manually by running: monolith env:set ${envKey} "<url>"`);
+    }
   });
 
 program
@@ -274,9 +281,9 @@ program
     const projectId = `proj_${crypto.randomBytes(16).toString('hex')}`;
     const config = { name: projectName, id: projectId };
     
-    // --- DATABASE SYNC PROTOCOL ---
+    // --- DATABASE SYNC & HARDWARE TETHER PROTOCOL ---
     const auth = getGlobalAuth();
-    const DASHBOARD_URL = auth.dashboardUrl || 'http://localhost:3000';
+    const dashboardUrl = auth.dashboardUrl || 'http://localhost:3000';
     const cliToken = auth.token;
 
     if (!cliToken) {
@@ -284,22 +291,62 @@ program
       console.error('Run: monolith login --token <your_token>');
       process.exit(1);
     }
-    const syncSpinner = ora('Syncing with Control Plane...').start();
+    
+    const syncSpinner = ora('Syncing with Control Plane to acquire hardware list...').start();
+    let availableServers = [];
+
     try {
-      await axios.post(`${DASHBOARD_URL}/api/cli/init`, {
+      // 1. Ask the Control Plane to initialize the project AND return the user's servers
+      const res = await axios.post(`${dashboardUrl}/api/cli/init`, {
         token: cliToken,
         projectId: projectId,
         projectName: projectName,
         buildDirectory: buildDir || '/'
       });
+      availableServers = res.data.servers;
       syncSpinner.succeed('Project registered in Dashboard Matrix.');
     } catch (error) {
       syncSpinner.fail('Failed to sync with Dashboard.');
       console.error(error.response?.data?.error || error.message);
-      process.exit(1); // Abort completely if database sync fails
+      process.exit(1); 
     }
-    // ------------------------------
 
+    // 2. INTERACTIVE HARDWARE SELECTION
+    if (!availableServers || availableServers.length === 0) {
+       console.log('\n⚠️  WARNING: No BYOC nodes found in your account.');
+       console.log('   The project is initialized, but you must attach a server via the Web Dashboard');
+       console.log('   or run `monolith link` later before you can deploy.\n');
+    } else {
+       console.log("\n⬛ AVAILABLE EXECUTION NODES:");
+       availableServers.forEach((s, index) => {
+         console.log(`[${index + 1}] 🖥️  ${s.name} (${s.ipAddress})`);
+       });
+
+       let validSelection = false;
+       while (!validSelection) {
+         const answer = await askQuestion('\nSelect target hardware to tether this workload (number): ');
+         const index = parseInt(answer.trim()) - 1;
+         const selected = availableServers[index];
+
+         if (!isNaN(index) && selected) {
+           validSelection = true;
+           const linkSpinner = ora(`Tethering workload to ${selected.name}...`).start();
+           try {
+             await axios.post(`${dashboardUrl}/api/cli/link`, {
+               token: cliToken,
+               projectId: projectId,
+               serverId: selected.id
+             });
+             linkSpinner.succeed(`✅ TETHER ESTABLISHED: Workload locked to [${selected.name}]`);
+           } catch (error) {
+             linkSpinner.fail('❌ Failed to tether hardware. You can link it later via the Dashboard.');
+           }
+         } else {
+           console.log("❌ Invalid selection. Please enter a valid number.");
+         }
+       }
+    }
+    // ----------------------------------------------
     fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
     
     // --- FIX 8: Auto-generate .gitignore to prevent secret leaks ---
@@ -611,24 +658,25 @@ program
   .command('rollback')
   .description('Instantly revert to the previous working deployment')
   .action(async () => {
-    const configDir = path.join(process.cwd(), '.monolith');
-    const configFile = path.join(configDir, 'project.json');
+    const configPath = path.join(process.cwd(), '.monolith', 'project.json');
+    if (!fs.existsSync(configPath)) return console.error("\n❌ Not a Monolith project. Run 'monolith init' first.");
 
-    if (!fs.existsSync(configFile)) {
-      console.error("\n❌ Not a Monolith project. Run 'monolith init' first.");
-      process.exit(1);
-    }
-
-    const config = JSON.parse(fs.readFileSync(configFile));
+    const config = JSON.parse(fs.readFileSync(configPath));
+    const activeProjectId = config.id || config.projectId;
+    
     console.log('\n⏪ INITIATING INSTANT ROLLBACK...');
 
     try {
-      const res = await axios.post(`${PLATFORM_URL}/api/rollback`, { projectId: config.id });
+      const target = await resolveTarget(activeProjectId);
+      const res = await axios.post(`${target.url}/api/rollback`, { projectId: activeProjectId }, {
+        headers: { 'x-api-key': target.apiKey }
+      });
+      
       console.log('\n✅ ' + res.data.message);
       console.log(`🌐 Live at: http://${res.data.domain}`);
     } catch (err) {
       if (err.code === 'ECONNREFUSED' || err.code === 'ETIMEDOUT') {
-        console.error('\n❌ Can\'t reach the Monolith server.');
+        console.error('\n❌ Can\'t reach the target node.');
       } else {
         console.error('\n❌ Rollback failed:', err.response?.data?.error || err.message);
       }
@@ -660,39 +708,51 @@ program
 
 program
   .command('destroy [targetId]')
-  .description('Permanently delete the current project from the server')
+  .description('Permanently delete a project from the target server')
   .action(async (targetId) => {
-    let projectId = targetId;
+    let activeProjectId = targetId;
     let configDir = null;
 
     // If no ID was provided in the command, try to read the local config
-    if (!projectId) {
+    if (!activeProjectId) {
       configDir = path.join(process.cwd(), '.monolith');
       const configFile = path.join(configDir, 'project.json');
+      
       if (!fs.existsSync(configFile)) {
          console.error("\n❌ No targetId provided, and not inside a Monolith project folder.");
-         console.error("Usage: monolith destroy ");
+         console.error("Usage: monolith destroy <projectId>");
          process.exit(1);
       }
-      projectId = JSON.parse(fs.readFileSync(configFile)).id;
+      
+      const config = JSON.parse(fs.readFileSync(configFile));
+      // Support both 'id' and 'projectId' keys based on how it was initialized/linked
+      activeProjectId = config.id || config.projectId; 
     }
     
-    console.log(`\n⚠️  WARNING: You are about to permanently eradicate project '${projectId}'.`);
+    console.log(`\n⚠️  WARNING: You are about to permanently eradicate project '${activeProjectId}'.`);
     
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const answer = await new Promise(resolve => rl.question(`Type the project ID to confirm: `, resolve));
     rl.close();
 
-    if (answer !== projectId) {
+    if (answer !== activeProjectId) {
        console.log('\n❌ Aborted.'); process.exit(0);
     }
 
-    const spinner = ora('Eradicating project from Azure...').start();
+    const spinner = ora('Acquiring hardware coordinates...').start();
     try {
-      axios.defaults.headers.common['x-api-key'] = process.env.PLATFORM_API_KEY;
-      const res = await axios.post(`${PLATFORM_URL}/api/destroy`, { projectId });
+      // 1. DYNAMIC TARGET ACQUISITION
+      const target = await resolveTarget(activeProjectId);
+      spinner.text = `Eradicating project from ${target.url}...`;
+      
+      // 2. TACTICAL STRIKE
+      const res = await axios.post(`${target.url}/api/destroy`, { projectId: activeProjectId }, {
+        headers: { 'x-api-key': target.apiKey }
+      });
+      
       spinner.succeed('🗑️  ' + res.data.message);
       
+      // 3. LOCAL CLEANUP (Only if we ran it from inside the project folder)
       if (configDir && fs.existsSync(configDir)) {
          fs.rmSync(configDir, { recursive: true, force: true });
          console.log('🧹 Local .monolith config removed.');
