@@ -482,7 +482,7 @@ program
     const spinner = ora('Forging connection to the Matrix...').start();
     
     try {
-      const res = await axios.post(`${dashboardUrl}/api/cli/servers/add`, {
+      const res = await axios.post(`${dashboardUrl}/api/cli/server/add`, {
         token: auth.token,
         name: name.trim(),
         ipAddress: ipAddress.trim(),
