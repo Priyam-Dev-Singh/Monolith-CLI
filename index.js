@@ -451,6 +451,52 @@ onlyIncludeFiles = ['package.json', 'package-lock.json', ${requiredFolders.join(
   });
 
 program
+  .command('server:add')
+  .description('Register a new BYOC Execution Node to your Monolith fleet')
+  .action(async () => {
+    const auth = getGlobalAuth();
+    const dashboardUrl = auth.dashboardUrl || 'http://localhost:3000';
+    
+    if (!auth || !auth.token) {
+      console.error("\n❌ FATAL: Operator unauthenticated. Run 'monolith login --token <your_token>' first.");
+      process.exit(1);
+    }
+
+    console.log('\n⬛ EXECUTION NODE REGISTRATION');
+    
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const askQuestion = (query) => new Promise((resolve) => rl.question(query, resolve));
+
+    const name = await askQuestion('Assign a tactical name (e.g., azure-prod-1): ');
+    const ipAddress = await askQuestion('Enter the public IPv4 address: ');
+    
+    // Using the askHidden function already present in your CLI to mask the key
+    const apiKey = await askHidden('Enter the x-api-key for this node (hidden): ');
+    rl.close();
+
+    if (!name.trim() || !ipAddress.trim() || !apiKey.trim()) {
+      console.log('\n❌ Aborted: All coordinates are strictly required.');
+      process.exit(1);
+    }
+
+    const spinner = ora('Forging connection to the Matrix...').start();
+    
+    try {
+      const res = await axios.post(`${dashboardUrl}/api/cli/server/add`, {
+        token: auth.token,
+        name: name.trim(),
+        ipAddress: ipAddress.trim(),
+        apiKey: apiKey.trim()
+      });
+      
+      spinner.succeed(`✅ ${res.data.message}`);
+      console.log(`🖥️  Node [${name}] is now live and visible in your Web Dashboard.`);
+    } catch (err) {
+      spinner.fail('❌ Registration failed: ' + (err.response?.data?.error || err.message));
+    }
+  });
+
+program
   .command('deploy')
   .description('Pack and deploy the current directory to the Monolith server')
   .action(async () => {
