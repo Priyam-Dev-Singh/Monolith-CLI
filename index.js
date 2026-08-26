@@ -281,9 +281,9 @@ program
     const projectId = `proj_${crypto.randomBytes(16).toString('hex')}`;
     const config = { name: projectName, id: projectId };
     
-    // --- DATABASE SYNC & HARDWARE TETHER PROTOCOL ---
+   // --- DATABASE SYNC & HARDWARE TETHER PROTOCOL ---
     const auth = getGlobalAuth();
-    const dashboardUrl = auth.dashboardUrl || 'http://localhost:3000';
+    const DASHBOARD_URL = auth.dashboardUrl || 'http://localhost:3000';
     const cliToken = auth.token;
 
     if (!cliToken) {
@@ -297,7 +297,7 @@ program
 
     try {
       // 1. Ask the Control Plane to initialize the project AND return the user's servers
-      const res = await axios.post(`${dashboardUrl}/api/cli/init`, {
+      const res = await axios.post(`${DASHBOARD_URL}/api/cli/init`, {
         token: cliToken,
         projectId: projectId,
         projectName: projectName,
@@ -332,7 +332,7 @@ program
            validSelection = true;
            const linkSpinner = ora(`Tethering workload to ${selected.name}...`).start();
            try {
-             await axios.post(`${dashboardUrl}/api/cli/link`, {
+             await axios.post(`${DASHBOARD_URL}/api/cli/link`, {
                token: cliToken,
                projectId: projectId,
                serverId: selected.id
