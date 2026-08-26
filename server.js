@@ -20,8 +20,8 @@ const app = express();
 app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 const upload = multer({ dest: 'uploads/' });
 
-// FIX 2: Strict Project ID validation (Defeats path traversal)
-const isValidProjectId = (id) => typeof id === 'string' && /^proj_[a-zA-Z0-9]+$/.test(id);
+// FIX 2: Strict Project ID validation (Defeats path traversal but allows Prisma UUIDs/CUIDs)
+const isValidProjectId = (id) => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(id);
 
 // SECURITY: Prevent Command Injection
 function isSafeIdentifier(s) {
