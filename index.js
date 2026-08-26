@@ -959,6 +959,8 @@ program
       const target = await resolveTarget(activeProjectId);
       console.log(`🔗 Target locked. Connecting to live Docker stream at ${target.url}... (Press Ctrl+C to exit)\n`);
 
+      console.log(`[DEBUG] Transmitting to: ${target.url}/api/logs/stream?projectId=${activeProjectId}`);
+
       const res = await axios({
         method: 'get',
         url: `${target.url}/api/logs/stream?projectId=${activeProjectId}`,
