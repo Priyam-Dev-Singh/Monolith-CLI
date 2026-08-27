@@ -204,8 +204,14 @@ program
   .command('db:destroy <containerName>')
   .description('Permanently delete a database and its data')
   .action(async (containerName) => {
+    const configPath = path.join(process.cwd(), '.monolith', 'project.json');
+    if (!fs.existsSync(configPath)) return console.error("❌ Run 'monolith init' first to establish target context.");
+    
+    const config = JSON.parse(fs.readFileSync(configPath));
+    const activeProjectId = config.id || config.projectId;
+
     console.log(`\n⚠️  WARNING: You are about to permanently eradicate '${containerName}'.`);
-    console.log('This data CANNOT be recovered.');
+    console.log('This data CANAMPOT be recovered.');
     
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const answer = await new Promise(resolve => rl.question(`Type the container name to confirm: `, resolve));
@@ -215,10 +221,12 @@ program
       console.log('\n❌ Aborted. Container name did not match.'); process.exit(0);
     }
 
-    const spinner = ora(`Destroying database ${containerName}...`).start();
+    const spinner = ora(`Acquiring target & destroying database ${containerName}...`).start();
     try {
-      axios.defaults.headers.common['x-api-key'] = process.env.PLATFORM_API_KEY;
-      const res = await axios.post(`${PLATFORM_URL}/api/db/destroy`, { containerName });
+      const target = await resolveTarget(activeProjectId);
+      const res = await axios.post(`${target.url}/api/db/destroy`, { containerName }, {
+        headers: { 'x-api-key': target.apiKey }
+      });
       spinner.succeed('🗑️  ' + res.data.message);
     } catch (err) {
       spinner.fail('Teardown failed: ' + (err.response?.data?.error || err.message));
@@ -633,14 +641,14 @@ program
   .action(async () => {
     const configPath = path.join(process.cwd(), '.monolith', 'project.json');
     if (!fs.existsSync(configPath)) {
-      console.error("❌ No project found. Run 'monolith init ' first.");
+      console.error("❌ No project found. Run 'monolith init' first.");
       process.exit(1);
     }
     
     const projectConfig = JSON.parse(fs.readFileSync(configPath));
-    const projectId = projectConfig.id;
+    const activeProjectId = projectConfig.id || projectConfig.projectId;
 
-    console.log(`\n🔗 LINKING GITHUB CI/CD FOR: ${projectConfig.name}`);
+    console.log(`\n🔗 LINKING GITHUB CI/CD FOR: ${projectConfig.name || activeProjectId}`);
     
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const askQuestion = (query) => new Promise((resolve) => rl.question(query, resolve));
@@ -659,13 +667,16 @@ program
     const token = await askHidden('Enter GitHub Personal Access Token (hidden): ');
     rl.close();
 
+    const spinner = ora('Acquiring hardware coordinates & injecting webhook...').start();
+
     try {
-      console.log(`\n⚙️  Forging webhook connection to ${repo.trim()}...`);
+      // 1. DYNAMIC TARGET ACQUISITION
+      const target = await resolveTarget(activeProjectId);
       
-      const webhookUrl = `${PLATFORM_URL}/api/webhook?projectId=${projectId}`;
+      // 2. FORGE WEBHOOK URL FOR SPECIFIC NODE
+      const webhookUrl = `${target.url}/api/webhook?projectId=${activeProjectId}`;
       
-      // Using GitHub's official REST API to inject the webhook
-      const response = await axios.post(
+      await axios.post(
         `https://api.github.com/repos/${repo.trim()}/hooks`,
         {
           name: 'web',
@@ -674,7 +685,7 @@ program
           config: {
             url: webhookUrl,
             content_type: 'json',
-            secret: process.env.GITHUB_WEBHOOK_SECRET
+            secret: process.env.GITHUB_WEBHOOK_SECRET // Ensure this is locally available or passed
           }
         },
         {
@@ -685,14 +696,14 @@ program
         }
       );
 
-      console.log(`\n✅ CI/CD PIPELINE ESTABLISHED!`);
-      console.log(`   Webhook injected successfully. Every 'git push' will now trigger an automatic deployment.`);
+      spinner.succeed(`✅ CI/CD PIPELINE ESTABLISHED!`);
+      console.log(`   Webhook injected securely pointing to target node.`);
       console.log(`📜 To see logs after each git push run 'monolith logs'\n`);
-      // Save the state so 'init' knows it's connected
+      
       projectConfig.githubConnected = true;
       fs.writeFileSync(configPath, JSON.stringify(projectConfig, null, 2));
     } catch (error) {
-      console.error(`\n❌ Failed to connect GitHub CI/CD:`);
+      spinner.fail(`❌ Failed to connect GitHub CI/CD:`);
       console.error(error.response?.data?.message || error.message);
       if (error.response?.status === 404) {
         console.error(`   (Hint: Check if the repository name is correct and your token has the right permissions.)`);
@@ -731,17 +742,27 @@ program
 
 program
   .command('list')
-  .description('View all active deployments and databases on the server')
+  .description('View all active deployments and databases on the target server')
   .action(async () => {
-    console.log('\n📡 Scanning Azure infrastructure...');
+    const configPath = path.join(process.cwd(), '.monolith', 'project.json');
+    if (!fs.existsSync(configPath)) return console.error("\n❌ Run 'monolith init' or 'monolith link' first to establish a hardware context.");
+    
+    const config = JSON.parse(fs.readFileSync(configPath));
+    const activeProjectId = config.id || config.projectId;
+
+    console.log('\n📡 Scanning local context hardware...');
     try {
-      axios.defaults.headers.common['x-api-key'] = process.env.PLATFORM_API_KEY;
-      const res = await axios.get(`${PLATFORM_URL}/api/list`);
+      const target = await resolveTarget(activeProjectId);
+      console.log(`🔗 Scanning target node at ${target.url}...\n`);
+
+      const res = await axios.get(`${target.url}/api/list`, {
+        headers: { 'x-api-key': target.apiKey }
+      });
 
       if (res.data.apps.length > 0) {
-        console.log('\n⬛ ACTIVE APPLICATIONS');
+        console.log('⬛ ACTIVE APPLICATIONS');
         console.table(res.data.apps);
-      } else { console.log('\n⬛ ACTIVE APPLICATIONS: None'); }
+      } else { console.log('⬛ ACTIVE APPLICATIONS: None'); }
 
       if (res.data.dbs.length > 0) {
         console.log('\n🗄️  ACTIVE DATABASES');
