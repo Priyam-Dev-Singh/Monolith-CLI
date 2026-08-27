@@ -586,25 +586,37 @@ app.post('/api/destroy', requireAuth, async (req, res) => {
   }
 });
 
-// --- DATABASE ERADICATION ENGINE ---
-app.post('/api/db/destroy', requireAuth, async (req, res) => {
+// --- DATABASE TEARDOWN PROTOCOL ---
+app.post('/api/db/destroy', requireAuth, (req, res) => {
   const { containerName } = req.body;
   
-  // Ensure it's a valid string to prevent shell injection
-  if (!isSafeIdentifier(containerName)) {
-    return res.status(400).json({ error: "Invalid container name." });
+  if (!containerName) {
+    return res.status(400).json({ error: 'Missing containerName parameter.' });
   }
 
-  console.log(`\n🧨 Initiating tactical teardown for DB: ${containerName}...`);
-
-  try {
-    // -f forces it to stop and remove. -v deletes the attached persistent storage volume.
-    await execAsync(`docker rm -f -v ${containerName}`);
-    res.json({ message: `Database ${containerName} and its volumes have been permanently eradicated.` });
-  } catch (error) {
-    console.error('DB Teardown Error:', error.message);
-    res.status(500).json({ error: 'Failed to destroy database. It may not exist.' });
+  // 1. Strict Sanitization (Prevents Command Injection)
+  if (!/^[a-zA-Z0-9_-]+$/.test(containerName)) {
+    return res.status(400).json({ error: 'Invalid container name format.' });
   }
+
+  console.log(`[TEARDOWN] Eradicating database container: ${containerName}`);
+  
+  // 2. The Kill Order (Force stop, remove container, and remove associated anonymous volumes)
+  const destroyCmd = `docker rm -f -v ${containerName}`;
+
+  exec(destroyCmd, (error, stdout, stderr) => {
+    if (error) {
+      console.error(`[TEARDOWN ERROR]:`, stderr);
+      // We return 200 if the container doesn't exist (already dead)
+      if (stderr.includes('No such container')) {
+        return res.status(200).json({ message: `Ghost resource cleared: ${containerName} was already destroyed.` });
+      }
+      return res.status(500).json({ error: 'Failed to eradicate database.', details: stderr });
+    }
+    
+    console.log(`[TEARDOWN SUCCESS] ${containerName} eradicated.`);
+    res.status(200).json({ message: `Database ${containerName} permanently eradicated.` });
+  });
 });
 
 
