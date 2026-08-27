@@ -192,7 +192,12 @@ program
       });
 
       spinner.succeed(`Database created and linked to vault successfully!`);
-      console.log(`\n🔗 Connection String: \x1b[36m${dbUrl}\x1b[0m`);
+      
+      console.log(`\n⬛ TARGET COORDINATES:`);
+      console.log(`🗄️  Container Name:  ${res.data.containerName}`); // The exact physical name
+      console.log(`🔗 Secure Vault:    ${envKey} auto-injected`);
+      console.log(`\n(Keep this container name handy if you ever need to run 'monolith db:destroy')\n`);
+
     } catch (error) {
       spinner.warn(`Database was created, but auto-linking failed.`);
       console.log(`\n🔗 Your Connection String is: \x1b[36m${dbUrl}\x1b[0m`);

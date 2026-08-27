@@ -411,7 +411,11 @@ app.post('/api/db', requireAuth, async (req, res) => {
     // CLEAN ASYNC EXECUTION (Replaces the messy callback)
     await execAsync(dockerCmd);
 
-    res.json({ message: `${dbType.toUpperCase()} Engine '${dbName}' online.`, databaseUrl: connectionString });
+    res.status(200).json({ 
+  message: 'Database provisioned successfully.', 
+  databaseUrl: connectionString,
+  containerName: actualContainerName // Ensure this variable holds 'postgres_test-db_af3811'
+});
 
   } catch (err) {
     console.error('DB Provisioning Error:', err);
