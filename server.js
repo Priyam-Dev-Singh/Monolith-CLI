@@ -414,7 +414,7 @@ app.post('/api/db', requireAuth, async (req, res) => {
     res.status(200).json({ 
   message: 'Database provisioned successfully.', 
   databaseUrl: connectionString,
-  containerName: actualContainerName // Ensure this variable holds 'postgres_test-db_af3811'
+  containerName: containerName // Ensure this variable holds 'postgres_test-db_af3811'
 });
 
   } catch (err) {

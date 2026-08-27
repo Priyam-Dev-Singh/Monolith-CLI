@@ -133,7 +133,7 @@ program
 
 program
   .command('db:create <dbName>')
-  .description('Provision a new Postgres database (e.g., monolith db create study_db)')
+  .description('Provision a new database (e.g., monolith db:create study_db)')
   .action(async (dbName) => {
     const configPath = path.join(process.cwd(), '.monolith', 'project.json');
     if (!fs.existsSync(configPath)) return console.error("❌ Run 'monolith init' first.");
@@ -167,7 +167,9 @@ program
        return;
     }
 
+    // Declare state variables outside the try/catch blocks so they survive the whole function
     let dbUrl = '';
+    let actualContainerName = ''; 
     let envKey = dbType === 'redis' ? 'REDIS_URL' : (dbType === 'mongodb' ? 'MONGO_URI' : 'DATABASE_URL');
 
     // --- PROVISION THE DATABASE ---
@@ -175,7 +177,10 @@ program
       const response = await axios.post(`${target.url}/api/db`, { dbName, dbType }, {
         headers: { 'x-api-key': target.apiKey }
       });
+      
       dbUrl = response.data.databaseUrl;
+      actualContainerName = response.data.containerName; // Save the physical name here
+      
       spinner.text = `Engine online. Auto-linking to server vault as ${envKey}...`;
     } catch (error) {
       spinner.fail("Failed to create database: " + (error.response?.data?.error || error.message));
@@ -191,17 +196,18 @@ program
         headers: { 'x-api-key': target.apiKey }
       });
 
-      spinner.succeed(`Database created and linked to vault successfully!`);
+      spinner.succeed(`Database Engine Online`);
       
+      // Output the exact physical name and variables we saved earlier
       console.log(`\n⬛ TARGET COORDINATES:`);
-      console.log(`🗄️  Container Name:  ${res.data.containerName}`); // The exact physical name
+      console.log(`🗄️  Container Name:  ${actualContainerName}`); 
       console.log(`🔗 Secure Vault:    ${envKey} auto-injected`);
       console.log(`\n(Keep this container name handy if you ever need to run 'monolith db:destroy')\n`);
 
     } catch (error) {
       spinner.warn(`Database was created, but auto-linking failed.`);
       console.log(`\n🔗 Your Connection String is: \x1b[36m${dbUrl}\x1b[0m`);
-      console.log(`⚠️ Please link it manually by running: monolith env:set ${envKey} "<url>"`);
+      console.log(`⚠️ Please link it manually by running: monolith env:set ${envKey}="<url>"`);
     }
   });
 
