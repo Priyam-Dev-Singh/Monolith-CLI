@@ -314,6 +314,43 @@ app.post('/api/env', requireAuth, (req, res) => {
   res.status(200).json({ message: 'Environment variables secured.' });
 });
 
+// --- ROUTE 3.1: READ SECRETS VAULT ---
+app.get('/api/env', requireAuth, (req, res) => {
+  const projectId = req.query.projectId;
+  if (!isValidProjectId(projectId)) return res.status(400).json({ error: 'Invalid projectId' });
+  
+  const envFilePath = path.join(__dirname, 'envs', projectId + '.env');
+  if (!fs.existsSync(envFilePath)) return res.json({ envs: {} });
+
+  const envContent = fs.readFileSync(envFilePath, 'utf8');
+  const envs = {};
+  
+  envContent.split('\n').forEach(line => {
+    const [key, ...valueParts] = line.split('=');
+    if (key) envs[key.trim()] = valueParts.join('=').trim();
+  });
+  
+  res.status(200).json({ envs });
+});
+
+// --- ROUTE 3.2: DELETE SECRETS FROM VAULT ---
+app.delete('/api/env', requireAuth, (req, res) => {
+  const { projectId, envKey } = req.body;
+  if (!isValidProjectId(projectId)) return res.status(400).json({ error: 'Invalid projectId' });
+  
+  const envFilePath = path.join(__dirname, 'envs', projectId + '.env');
+  if (!fs.existsSync(envFilePath)) return res.status(200).json({ message: 'Vault empty.' });
+
+  const envContent = fs.readFileSync(envFilePath, 'utf8');
+  const lines = envContent.split('\n').filter(line => {
+    const key = line.split('=')[0];
+    return key && key.trim() !== envKey; // Keep everything EXCEPT the target key
+  });
+
+  fs.writeFileSync(envFilePath, lines.join('\n') + (lines.length > 0 ? '\n' : ''));
+  res.status(200).json({ message: `Variable ${envKey} securely eradicated.` });
+});
+
 // --- ROUTE 4: DATABASE PROVISIONER ---
 app.post('/api/db', requireAuth, async (req, res) => {
   const { dbName, dbType = 'postgres' } = req.body;
