@@ -174,7 +174,12 @@ program
 
     // --- PROVISION THE DATABASE ---
     try {
-      const response = await axios.post(`${target.url}/api/db`, { dbName, dbType }, {
+      // 🎯 We are now injecting the activeProjectId into the payload
+      const response = await axios.post(`${target.url}/api/db`, { 
+        projectId: activeProjectId, 
+        dbName, 
+        dbType 
+      }, {
         headers: { 'x-api-key': target.apiKey }
       });
       
