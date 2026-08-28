@@ -597,7 +597,7 @@ program
 
     output.on('close', async () => {
       console.log(`📦 Packed ${archive.pointer()} total bytes.`);
-      console.log('🚀 Uploading payload to Execution Node...');
+      console.log('🚀 Uploading payload to Execution Node...  This may take several minutes...');
       
       const form = new FormData();
       form.append('projectId', config.id);

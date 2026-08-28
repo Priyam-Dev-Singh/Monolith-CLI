@@ -536,7 +536,7 @@ app.get('/api/list', requireAuth, (req, res) => {
       const [name, status] = line.split('|');
       
       // Strict Multitenancy filter
-      if (projectId && !name.includes(projectId)) return;
+     if (projectId && !name.toLowerCase().includes(projectId.toLowerCase())) return;
 
       const isDatabase = name.startsWith('db_') || 
                          name.startsWith('postgres_') || 
