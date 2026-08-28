@@ -353,15 +353,19 @@ app.delete('/api/env', requireAuth, (req, res) => {
 
 // --- ROUTE 4: DATABASE PROVISIONER ---
 app.post('/api/db', requireAuth, async (req, res) => {
-  const { dbName, dbType = 'postgres' } = req.body;
+  const { dbName, dbType, projectId } = req.body;
 
+   if (!projectId || !dbName || !dbType) {
+  return res.status(400).json({ error: 'Missing parameters (projectId, dbName, dbType).' });
+}
   if (!isSafeIdentifier(dbName)) {
     return res.status(400).json({ error: "Invalid database name. Use only letters, numbers, dashes, and underscores." });
   }
+ 
 
   const dbId = crypto.randomBytes(3).toString('hex');
   const password = crypto.randomBytes(16).toString('hex');
-  const containerName = `${dbType}_${dbName}_${dbId}`;
+  const containerName = `db_${projectId}_${dbType}_${dbName}_${dbId}`;
 
   // SECURITY: Temporary Env File Setup to prevent ps aux leaking
   const dbEnvDir = path.join(__dirname, 'db-envs');
@@ -518,34 +522,34 @@ app.post('/api/rollback', requireAuth, async (req, res) => {
 });
 
 // --- THE READ ENGINE (STATUS) ---
-app.get('/api/list', requireAuth, async (req, res) => {
-  try {
-    // Query Docker for everything currently running
-    const { stdout } = await execAsync(`docker ps --format '{{.Names}}|{{.Status}}|{{.Ports}}'`);
-    const lines = stdout.trim().split('\n').filter(Boolean);
+app.get('/api/list', requireAuth, (req, res) => {
+  const { projectId } = req.query; // The Control Plane will now send this
+
+  exec('docker ps --format "{{.Names}}|{{.Status}}"', (error, stdout) => {
+    if (error) return res.status(500).json({ error: 'Failed to read engine state' });
     
+    const lines = stdout.trim().split('\n').filter(Boolean);
     const apps = [];
     const dbs = [];
 
     lines.forEach(line => {
       const [name, status] = line.split('|');
-      if (name.startsWith('live_')) {
+      
+      // Filter out containers that don't belong to this project (if projectId is provided)
+      if (projectId && !name.includes(projectId)) return;
+
+      if (name.startsWith('db_')) {
+        // Parse the new convention: db_projectId_engine_dbname_hash
         const parts = name.split('_');
-        const projectId = parts[1] + '_' + parts[2];
-        const domain = `http://${projectId}.20.2.198.46.nip.io`;
-        // Only add the newest active container for each app to the list
-        if (!apps.find(a => a.project === projectId)) {
-          apps.push({ project: projectId, status, domain });
-        }
-      } else if (name.match(/^(postgres|mysql|mongodb|redis)_/)) {
-        dbs.push({ engine: name, status });
+        const engine = parts[2] || 'unknown'; 
+        dbs.push({ engine: engine.toUpperCase(), name: name, status });
+      } else {
+        apps.push({ name, status });
       }
     });
 
     res.json({ apps, dbs });
-  } catch (error) {
-    res.status(500).json({ error: 'Failed to fetch infrastructure status.' });
-  }
+  });
 });
 
 // --- THE DESTROY ENGINE (TEARDOWN) ---
