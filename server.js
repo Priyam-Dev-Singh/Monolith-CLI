@@ -523,7 +523,7 @@ app.post('/api/rollback', requireAuth, async (req, res) => {
 
 // --- THE READ ENGINE (STATUS) ---
 app.get('/api/list', requireAuth, (req, res) => {
-  const { projectId } = req.query; // The Control Plane will send this
+  const { projectId } = req.query; 
 
   exec('docker ps --format "{{.Names}}|{{.Status}}"', (error, stdout) => {
     if (error) return res.status(500).json({ error: 'Failed to read engine state' });
@@ -535,10 +535,9 @@ app.get('/api/list', requireAuth, (req, res) => {
     lines.forEach(line => {
       const [name, status] = line.split('|');
       
-      // Strict Multitenancy: If a projectId is requested, hide everything else
+      // Strict Multitenancy filter
       if (projectId && !name.includes(projectId)) return;
 
-      // Detection Matrix: Catches new architecture (db_) AND legacy engines
       const isDatabase = name.startsWith('db_') || 
                          name.startsWith('postgres_') || 
                          name.startsWith('mysql_') || 
@@ -548,10 +547,11 @@ app.get('/api/list', requireAuth, (req, res) => {
       if (isDatabase) {
         let engine = 'UNKNOWN';
         if (name.startsWith('db_')) {
-          // Extracts 'postgres' from db_proj123_postgres_test
-          engine = name.split('_')[2] || 'UNKNOWN'; 
+          // Strict Regex: Looks for exact engine names sandwiched between underscores
+          const match = name.match(/^db_.*?_(postgres|mysql|mongodb|redis)_/);
+          if (match) engine = match[1];
         } else {
-          // Extracts 'mongodb' from mongodb_test_persistence...
+          // Legacy support
           engine = name.split('_')[0]; 
         }
         dbs.push({ engine: engine.toUpperCase(), name: name, status });
