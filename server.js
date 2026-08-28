@@ -523,7 +523,7 @@ app.post('/api/rollback', requireAuth, async (req, res) => {
 
 // --- THE READ ENGINE (STATUS) ---
 app.get('/api/list', requireAuth, (req, res) => {
-  const { projectId } = req.query; // The Control Plane will now send this
+  const { projectId } = req.query; // The Control Plane will send this
 
   exec('docker ps --format "{{.Names}}|{{.Status}}"', (error, stdout) => {
     if (error) return res.status(500).json({ error: 'Failed to read engine state' });
@@ -535,13 +535,25 @@ app.get('/api/list', requireAuth, (req, res) => {
     lines.forEach(line => {
       const [name, status] = line.split('|');
       
-      // Filter out containers that don't belong to this project (if projectId is provided)
+      // Strict Multitenancy: If a projectId is requested, hide everything else
       if (projectId && !name.includes(projectId)) return;
 
-      if (name.startsWith('db_')) {
-        // Parse the new convention: db_projectId_engine_dbname_hash
-        const parts = name.split('_');
-        const engine = parts[2] || 'unknown'; 
+      // Detection Matrix: Catches new architecture (db_) AND legacy engines
+      const isDatabase = name.startsWith('db_') || 
+                         name.startsWith('postgres_') || 
+                         name.startsWith('mysql_') || 
+                         name.startsWith('mongodb_') || 
+                         name.startsWith('redis_');
+
+      if (isDatabase) {
+        let engine = 'UNKNOWN';
+        if (name.startsWith('db_')) {
+          // Extracts 'postgres' from db_proj123_postgres_test
+          engine = name.split('_')[2] || 'UNKNOWN'; 
+        } else {
+          // Extracts 'mongodb' from mongodb_test_persistence...
+          engine = name.split('_')[0]; 
+        }
         dbs.push({ engine: engine.toUpperCase(), name: name, status });
       } else {
         apps.push({ name, status });
