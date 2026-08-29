@@ -576,9 +576,9 @@ app.post('/api/destroy', requireAuth, async (req, res) => {
     const { stdout } = await execAsync(`docker ps -a --format "{{.Names}}"`);
     const allContainers = stdout.trim().split('\n').filter(Boolean);
     
-    // Target exact matches (legacy) OR timestamped matches (modern)
+    // Target Application Containers AND Explicitly Linked Databases
     const targets = allContainers.filter(name => 
-      name === `live_${projectId}` || name.startsWith(`live_${projectId}_`)
+      name.startsWith(`live_${projectId}`) || name.startsWith(`db_${projectId}_`)
     );
 
     if (targets.length > 0) {
@@ -606,34 +606,35 @@ app.post('/api/destroy', requireAuth, async (req, res) => {
   }
 });
 
-// --- APPLICATION TEARDOWN PROTOCOL ---
-app.post('/api/app/destroy', requireAuth, (req, res) => {
-  const { containerName } = req.body;
+// --- SURGICAL APP STRIKE ---
+app.post('/api/app/purge', requireAuth, async (req, res) => {
+  const { projectId, containerName } = req.body;
   
-  if (!containerName) {
-    return res.status(400).json({ error: 'Missing containerName parameter.' });
-  }
+  if (!projectId) return res.status(400).json({ error: 'Missing projectId parameter.' });
 
-  // Strict Sanitization
-  if (!/^[a-zA-Z0-9_-]+$/.test(containerName)) {
-    return res.status(400).json({ error: 'Invalid container name format.' });
-  }
+  console.log(`\n🎯 Initiating surgical strike on app containers for ${projectId}...`);
 
-  console.log(`[TEARDOWN] Eradicating application container: ${containerName}`);
-  
-  // The Kill Order (Force stop and remove)
-  exec(`docker rm -f ${containerName}`, (error, stdout, stderr) => {
-    if (error) {
-      console.error(`[TEARDOWN ERROR]:`, stderr);
-      if (stderr.includes('No such container')) {
-        return res.status(200).json({ message: `Ghost resource cleared.` });
-      }
-      return res.status(500).json({ error: 'Failed to eradicate application.', details: stderr });
-    }
+  try {
+    const { stdout } = await execAsync(`docker ps -a --format "{{.Names}}"`);
+    const allContainers = stdout.trim().split('\n').filter(Boolean);
     
-    console.log(`[TEARDOWN SUCCESS] ${containerName} eradicated.`);
-    res.status(200).json({ message: `Application ${containerName} offline and destroyed.` });
-  });
+    // If user provided a specific container name, target only that. Otherwise, target the active live_ app.
+    const targets = allContainers.filter(name => {
+      if (containerName) return name === containerName;
+      return name.startsWith(`live_${projectId}`); // Only targets the app, leaves DB alone
+    });
+
+    if (targets.length === 0) {
+      return res.json({ message: 'No active application containers found to kill.' });
+    }
+
+    await execAsync(`docker rm -f ${targets.join(' ')}`);
+    res.json({ message: `Successfully terminated application: ${targets.join(', ')}` });
+
+  } catch (error) {
+    console.error('Kill Strike Error:', error.message);
+    res.status(500).json({ error: 'Failed to terminate application.' });
+  }
 });
 
 // --- DATABASE TEARDOWN PROTOCOL ---

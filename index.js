@@ -846,39 +846,49 @@ program
   });
 
 program
-  .command('app:destroy <appName>')
-  .description('Eradicate an active application container (e.g., monolith app:destroy live_proj_123)')
-  .action(async (appName) => {
+  .command('app:purge [containerName]')
+  .description('Surgically purge an application container without destroying the project or database')
+  .action(async (containerName) => {
     const configPath = path.join(process.cwd(), '.monolith', 'project.json');
-    if (!fs.existsSync(configPath)) return console.error("❌ Run 'monolith init' first.");
-    const config = JSON.parse(fs.readFileSync(configPath));
-    const activeProjectId = config.id || config.projectId;
-
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const askQuestion = (query) => new Promise((resolve) => rl.question(query, resolve));
-
-    const answer = await askQuestion(`\n⚠️  WARNING: You are about to permanently destroy application '${appName}'.\nType the name to confirm: `);
-    rl.close();
-
-    if (answer !== appName) {
-      console.log('❌ Teardown aborted. Name did not match.');
-      return;
+    
+    if (!fs.existsSync(configPath) && !containerName) {
+      return console.error("❌ Run 'monolith init' first, or provide a specific container name.");
     }
 
-    const spinner = ora(`Transmitting kill order to Execution Node...`).start();
+    let activeProjectId = null;
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath));
+      activeProjectId = config.id || config.projectId;
+    }
+
+    const targetNameMsg = containerName ? `container '${containerName}'` : `the active application for project '${activeProjectId}'`;
+    
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const answer = await new Promise(resolve => rl.question(`\n⚠️  WARNING: You are about to purge ${targetNameMsg}.\nType 'yes' to confirm: `, resolve));
+    rl.close();
+
+    if (answer.toLowerCase() !== 'yes') {
+      return console.log('❌ Aborted.');
+    }
+
+    const spinner = ora(`Transmitting purge order...`).start();
     
     try {
+      if (!activeProjectId) throw new Error("Must be inside a project directory to route the command without a server URL.");
+      
       const target = await resolveTarget(activeProjectId);
-      await axios.post(`${target.url}/api/app/destroy`, {
-        containerName: appName
+      
+      // ALIGNED THE ENDPOINT TO /purge
+      const res = await axios.post(`${target.url}/api/app/purge`, {
+        projectId: activeProjectId,
+        containerName 
       }, {
         headers: { 'x-api-key': target.apiKey }
       });
 
-      spinner.succeed(`✅ Application [${appName}] eradicated.`);
-      console.log(`\n(Run 'monolith list' to verify the radar is clear)\n`);
+      spinner.succeed(`✅ ${res.data.message}`);
     } catch (err) {
-      spinner.fail('❌ Teardown failed.');
+      spinner.fail('❌ Purge order failed.');
       console.error(err.response?.data?.error || err.message);
     }
   });
