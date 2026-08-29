@@ -846,6 +846,44 @@ program
   });
 
 program
+  .command('app:destroy <appName>')
+  .description('Eradicate an active application container (e.g., monolith app:destroy live_proj_123)')
+  .action(async (appName) => {
+    const configPath = path.join(process.cwd(), '.monolith', 'project.json');
+    if (!fs.existsSync(configPath)) return console.error("❌ Run 'monolith init' first.");
+    const config = JSON.parse(fs.readFileSync(configPath));
+    const activeProjectId = config.id || config.projectId;
+
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const askQuestion = (query) => new Promise((resolve) => rl.question(query, resolve));
+
+    const answer = await askQuestion(`\n⚠️  WARNING: You are about to permanently destroy application '${appName}'.\nType the name to confirm: `);
+    rl.close();
+
+    if (answer !== appName) {
+      console.log('❌ Teardown aborted. Name did not match.');
+      return;
+    }
+
+    const spinner = ora(`Transmitting kill order to Execution Node...`).start();
+    
+    try {
+      const target = await resolveTarget(activeProjectId);
+      await axios.post(`${target.url}/api/app/destroy`, {
+        containerName: appName
+      }, {
+        headers: { 'x-api-key': target.apiKey }
+      });
+
+      spinner.succeed(`✅ Application [${appName}] eradicated.`);
+      console.log(`\n(Run 'monolith list' to verify the radar is clear)\n`);
+    } catch (err) {
+      spinner.fail('❌ Teardown failed.');
+      console.error(err.response?.data?.error || err.message);
+    }
+  });
+
+program
   .command('link')
   .description('Tether current directory to a deployed Monolith workload')
   .action(async () => {
