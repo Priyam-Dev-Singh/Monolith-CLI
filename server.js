@@ -564,7 +564,7 @@ app.get('/api/list', requireAuth, (req, res) => {
   });
 });
 
-// --- THE DESTROY ENGINE (TEARDOWN) ---
+// --- THE DESTROY ENGINE (COMPLETE TEARDOWN) ---
 app.post('/api/destroy', requireAuth, async (req, res) => {
   const { projectId } = req.body;
   if (!isValidProjectId(projectId)) return res.status(400).json({ error: 'Invalid projectId' });
@@ -604,6 +604,36 @@ app.post('/api/destroy', requireAuth, async (req, res) => {
     console.error('Teardown Error:', error.message);
     res.status(500).json({ error: 'Failed to destroy project infrastructure.' });
   }
+});
+
+// --- APPLICATION TEARDOWN PROTOCOL ---
+app.post('/api/app/destroy', requireAuth, (req, res) => {
+  const { containerName } = req.body;
+  
+  if (!containerName) {
+    return res.status(400).json({ error: 'Missing containerName parameter.' });
+  }
+
+  // Strict Sanitization
+  if (!/^[a-zA-Z0-9_-]+$/.test(containerName)) {
+    return res.status(400).json({ error: 'Invalid container name format.' });
+  }
+
+  console.log(`[TEARDOWN] Eradicating application container: ${containerName}`);
+  
+  // The Kill Order (Force stop and remove)
+  exec(`docker rm -f ${containerName}`, (error, stdout, stderr) => {
+    if (error) {
+      console.error(`[TEARDOWN ERROR]:`, stderr);
+      if (stderr.includes('No such container')) {
+        return res.status(200).json({ message: `Ghost resource cleared.` });
+      }
+      return res.status(500).json({ error: 'Failed to eradicate application.', details: stderr });
+    }
+    
+    console.log(`[TEARDOWN SUCCESS] ${containerName} eradicated.`);
+    res.status(200).json({ message: `Application ${containerName} offline and destroyed.` });
+  });
 });
 
 // --- DATABASE TEARDOWN PROTOCOL ---
