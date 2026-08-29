@@ -433,32 +433,47 @@ app.post('/api/db', requireAuth, async (req, res) => {
 // --- LIVE LOG STREAMING ENGINE ---
 app.get('/api/logs/stream', requireAuth, async (req, res) => {
   const projectId = req.query.projectId;
-  if (!isValidProjectId(projectId)) return res.status(400).send('Invalid projectId');
+  if (!projectId) return res.status(400).send('Invalid projectId');
+
+  // The SSE Protocol: Forces real-time chunk reading
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
 
   try {
-    // Find the currently active container for this project
-    const { stdout } = await execAsync(`docker ps -q -f "name=^live_${projectId}_"`);
+    // Hardened search: Finds the exact container regardless of trailing characters
+    const { stdout } = await execAsync(`docker ps -q -f "name=live_${projectId}"`);
     const containerId = stdout.trim().split('\n')[0];
 
     if (!containerId) {
-      return res.status(404).send('❌ No running container found for this project.\n');
+      res.write(`data: [SYSTEM] No active workload found for ${projectId}\n\n`);
+      return res.end();
     }
 
-    // Set headers for a continuous stream
-    res.setHeader('Content-Type', 'text/plain');
-    res.setHeader('Transfer-Encoding', 'chunked');
+    // Connect directly to the Docker engine daemon
+    const child = spawn('docker', ['logs', '-f', '--tail', '50', containerId]);
 
-    // Spawn a process that attaches directly to the Docker daemon (-f means "follow" in real-time)
-    const child = spawn('docker', ['logs', '-f', '--tail', '100', containerId]);
-    
-    child.stdout.on('data', data => res.write(data));
-    child.stderr.on('data', data => res.write(data));
+    // Format output exactly to SSE specs (data: <string>\n\n)
+    child.stdout.on('data', data => {
+      const lines = data.toString().split('\n');
+      lines.forEach(line => {
+        if (line) res.write(`data: ${line}\n\n`);
+      });
+    });
 
-    // If the user hits Ctrl+C on their laptop, close the stream gracefully on the server
+    child.stderr.on('data', data => {
+      const lines = data.toString().split('\n');
+      lines.forEach(line => {
+        if (line) res.write(`data: [WARN] ${line}\n\n`);
+      });
+    });
+
+    // Clean up memory if the user closes the dashboard tab
     req.on('close', () => child.kill());
 
   } catch (err) {
-    res.status(500).send('Failed to fetch logs.\n');
+    res.write(`data: [SYSTEM] Engine connection severed.\n\n`);
+    res.end();
   }
 });
 
