@@ -119,10 +119,21 @@ async function getFreePort(min, max) {
 // --- CORE DEPLOYMENT ENGINE ---
 
 // FIX 7: Make engine asynchronous
-// --- THE BLUE/GREEN DEPLOYMENT ENGINE ---
+
+// --- THE BLUE/GREEN DEPLOYMENT ENGINE (WITH X-RAY LOGGING) ---
 async function buildAndDeploy(projectId, extractDest) {
-  console.log(`\n🚀 Starting Zero-Downtime Deployment for ${projectId}...`);
-  const version = Date.now(); // Unique timestamp for this build
+  // 1. Initialize the Log Stream File
+  const logDir = path.join(__dirname, 'logs');
+  if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+  const logFile = path.join(logDir, `${projectId}.log`);
+  
+  const writeLog = (msg) => {
+    console.log(msg);
+    fs.appendFileSync(logFile, `[SYSTEM] ${msg}\n`);
+  };
+
+  writeLog(`🚀 Starting Zero-Downtime Deployment for ${projectId}...`);
+  const version = Date.now();
   const imageName = `img_${projectId}`;
   const newContainerName = `live_${projectId}_${version}`;
   let buildPath = extractDest;
@@ -140,45 +151,37 @@ async function buildAndDeploy(projectId, extractDest) {
   let nixpacksEnvFlag = '';
   
   if (fs.existsSync(envFilePath)) {
-    console.log('🔒 Injecting secure environment vault...');
-    
-    // 1. Docker wants the file path directly
+    writeLog('🔒 Injecting secure environment vault...');
     dockerEnvFlag = `--env-file ${envFilePath} `;
-    
-    // 2. Nixpacks wants individual --env KEY=VALUE flags
     const envLines = fs.readFileSync(envFilePath, 'utf8').split('\n').filter(line => line.trim() !== '');
     nixpacksEnvFlag = envLines.map(line => `--env ${line.trim()}`).join(' ') + ' ';
   }
 
   try {
-    // 1. Build the new image (Using Nixpacks formatting)
-    await execAsync(`nixpacks build ${buildPath} --name ${imageName} ${nixpacksEnvFlag}`);
+    writeLog('⚙️ Engaging Nixpacks Build Engine...');
     
-    // 2. Find currently running containers for this project
+    // 2. THE PIPELINE SPLIT: Redirects build output to the log file in real-time
+    await execAsync(`nixpacks build ${buildPath} --name ${imageName} ${nixpacksEnvFlag} >> ${logFile} 2>&1`);
+    
     let oldContainers = '';
     try {
       const { stdout } = await execAsync(`docker ps -q -f "name=^live_${projectId}_"`);
       oldContainers = stdout.trim();
     } catch (e) {}
 
-    console.log('Forging the new container...');
-    
-    // CRASH RECOVERY & DYNAMIC PORT (Using Docker formatting)
+    writeLog('Forging the new container...');
     await execAsync(`docker run -d --restart unless-stopped --name ${newContainerName} -p 0:3000 ${dockerEnvFlag}${imageName}`);
     
-    // HEALTH CHECK: Wait 5 seconds to see if it crashes on boot
-    console.log('🩺 Running health check...');
+    writeLog('🩺 Running health check (5s)...');
     await new Promise(resolve => setTimeout(resolve, 5000));
     const { stdout: status } = await execAsync(`docker inspect -f '{{.State.Running}}' ${newContainerName}`);
     
     if (status.trim() !== 'true') {
-      // It crashed! Destroy the bad container and abort before touching Caddy.
-      console.error('❌ Health check failed. Container crashed on startup.');
+      writeLog('❌ Health check failed. Container crashed on startup.');
       await execAsync(`docker rm -f ${newContainerName}`);
       throw new Error('Deployment failed health check. Traffic was not routed.');
     }
 
-    // 3. It survived. Wire up Caddy.
     const { stdout: portBuffer } = await execAsync(`docker inspect --format='{{(index (index .NetworkSettings.Ports "3000/tcp") 0).HostPort}}' ${newContainerName}`);
     const assignedPort = portBuffer.toString().trim();
 
@@ -189,17 +192,16 @@ async function buildAndDeploy(projectId, extractDest) {
     fs.writeFileSync(path.join(caddyDir, projectId + '.caddy'), `http://${domain} {\n  reverse_proxy localhost:${assignedPort}\n}\n`);
     await execAsync('caddy reload --config ./Caddyfile', { cwd: __dirname });
     
-    // 4. Gracefully retire the old container (Stop, do not delete, for rollback)
     if (oldContainers) {
       const ids = oldContainers.split('\n').join(' ');
-      console.log(`Stopping previous versions: ${ids}`);
+      writeLog(`Stopping previous versions (Rollback preserved): ${ids}`);
       await execAsync(`docker stop ${ids}`);
     }
 
-    console.log('✅ Deployment live: http://' + domain);
+    writeLog(`✅ Deployment live: http://${domain}`);
     return domain;
   } catch (error) {
-    console.error('Build Error:', error.message);
+    writeLog(`❌ Build Error: ${error.message}`);
     throw error;
   }
 }
