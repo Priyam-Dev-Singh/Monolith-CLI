@@ -9,6 +9,8 @@ const fs = require('fs');
 const path = require('path');
 const net = require('net');
 
+
+
 if (!process.env.PLATFORM_API_KEY || !process.env.GITHUB_WEBHOOK_SECRET) {
   console.error("❌ FATAL: Missing PLATFORM_API_KEY or GITHUB_WEBHOOK_SECRET in .env");
   process.exit(1);
@@ -114,7 +116,6 @@ async function getFreePort(min, max) {
   }
   throw new Error("No free ports available in range.");
 }
-
 
 // --- CORE DEPLOYMENT ENGINE ---
 
@@ -432,51 +433,51 @@ app.post('/api/db', requireAuth, async (req, res) => {
   }
 });
 
-// --- LIVE LOG STREAMING ENGINE ---
+// --- UNIFIED TELEMETRY STREAM (BUILD + RUNTIME) ---
 app.get('/api/logs/stream', requireAuth, async (req, res) => {
   const projectId = req.query.projectId;
   if (!projectId) return res.status(400).send('Invalid projectId');
 
-  // The SSE Protocol: Forces real-time chunk reading
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
 
+  // 1. Ensure the log file exists so the stream doesn't crash on a fresh project
+  const logDir = path.join(__dirname, 'logs');
+  if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+  const logFile = path.join(logDir, `${projectId}.log`);
+  if (!fs.existsSync(logFile)) fs.writeFileSync(logFile, '[SYSTEM] Telemetry stream initialized.\n');
+
+  const sendToStream = (data, prefix = '') => {
+    const lines = data.toString().split('\n');
+    lines.forEach(line => {
+      if (line.trim()) res.write(`data: ${prefix}${line}\n\n`);
+    });
+  };
+
+  // 2. TACTICAL TAIL: Stream the Build Logs (The file)
+  const tailProcess = spawn('tail', ['-n', '100', '-f', logFile]);
+  tailProcess.stdout.on('data', data => sendToStream(data));
+  tailProcess.stderr.on('data', data => sendToStream(data, '[WARN] '));
+
+  // 3. ENGINE ATTACHMENT: Stream the Runtime Logs (The Docker Container)
+  let dockerProcess = null;
   try {
-    // Hardened search: Finds the exact container regardless of trailing characters
     const { stdout } = await execAsync(`docker ps -q -f "name=live_${projectId}"`);
-    const containerId = stdout.trim().split('\n')[0];
-
-    if (!containerId) {
-      res.write(`data: [SYSTEM] No active workload found for ${projectId}\n\n`);
-      return res.end();
+    const containerId = stdout.trim().split('\n')[0]; // Grab the most recent if multiple exist
+    
+    if (containerId) {
+      dockerProcess = spawn('docker', ['logs', '-f', '--tail', '50', containerId]);
+      dockerProcess.stdout.on('data', data => sendToStream(data, '[RUNTIME] '));
+      dockerProcess.stderr.on('data', data => sendToStream(data, '[RUNTIME ERR] '));
     }
+  } catch (err) {}
 
-    // Connect directly to the Docker engine daemon
-    const child = spawn('docker', ['logs', '-f', '--tail', '50', containerId]);
-
-    // Format output exactly to SSE specs (data: <string>\n\n)
-    child.stdout.on('data', data => {
-      const lines = data.toString().split('\n');
-      lines.forEach(line => {
-        if (line) res.write(`data: ${line}\n\n`);
-      });
-    });
-
-    child.stderr.on('data', data => {
-      const lines = data.toString().split('\n');
-      lines.forEach(line => {
-        if (line) res.write(`data: [WARN] ${line}\n\n`);
-      });
-    });
-
-    // Clean up memory if the user closes the dashboard tab
-    req.on('close', () => child.kill());
-
-  } catch (err) {
-    res.write(`data: [SYSTEM] Engine connection severed.\n\n`);
-    res.end();
-  }
+  // 4. CLEANUP: Sever the connections if the user closes the dashboard tab
+  req.on('close', () => {
+    tailProcess.kill();
+    if (dockerProcess) dockerProcess.kill();
+  });
 });
 
 // --- ROLLBACK ENGINE ---
