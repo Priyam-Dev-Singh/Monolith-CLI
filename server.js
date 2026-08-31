@@ -305,16 +305,39 @@ app.post('/api/dashboard/deploy', async (req, res) => {
   }
 });
 
-// --- ROUTE 3: SECRETS VAULT ---
+// --- ROUTE 3.0: UPSERT SECRETS VAULT (MERGE STRATEGY) ---
 app.post('/api/env', requireAuth, (req, res) => {
   const { projectId, envs } = req.body;
   const envDir = path.join(__dirname, 'envs');
   if (!fs.existsSync(envDir)) fs.mkdirSync(envDir, { recursive: true });
+  
   const envFilePath = path.join(envDir, projectId + '.env');
-  let envContent = '';
-  for (const [key, value] of Object.entries(envs)) { envContent += key + '=' + value + '\n'; }
-  fs.writeFileSync(envFilePath, envContent);
-  res.status(200).json({ message: 'Environment variables secured.' });
+  
+  // 1. Extract existing variables into memory
+  let currentEnvs = {};
+  if (fs.existsSync(envFilePath)) {
+    const existingContent = fs.readFileSync(envFilePath, 'utf8');
+    existingContent.split('\n').forEach(line => {
+      const [key, ...valueParts] = line.split('=');
+      if (key && key.trim() !== '') {
+        currentEnvs[key.trim()] = valueParts.join('=').trim();
+      }
+    });
+  }
+
+  // 2. Merge the incoming variables (Upsert)
+  for (const [key, value] of Object.entries(envs)) { 
+    currentEnvs[key.trim()] = value; 
+  }
+
+  // 3. Serialize and secure the updated vault
+  let newContent = '';
+  for (const [key, value] of Object.entries(currentEnvs)) { 
+    newContent += `${key}=${value}\n`; 
+  }
+  
+  fs.writeFileSync(envFilePath, newContent);
+  res.status(200).json({ message: 'Environment variables secured and merged.' });
 });
 
 // --- ROUTE 3.1: READ SECRETS VAULT ---
@@ -687,7 +710,6 @@ app.post('/api/db/destroy', requireAuth, (req, res) => {
     res.status(200).json({ message: `Database ${containerName} permanently eradicated.` });
   });
 });
-
 
 
 const PORT = 4000;
