@@ -713,6 +713,20 @@ program
       );
 
       spinner.succeed(`✅ CI/CD PIPELINE ESTABLISHED!`);
+      // --- NEW: SYNCHRONIZE WITH THE CONTROL PLANE ---
+      const auth = getGlobalAuth();
+      const dashboardUrl = auth.dashboardUrl || 'http://localhost:3000';
+      
+      try {
+        await axios.post(`${dashboardUrl}/api/cli/projects/link-repo`, {
+          projectId: activeProjectId,
+          repoUrl: `https://github.com/${repo.trim()}.git`,
+          token: auth.token
+        });
+        console.log(`   Web Dashboard synchronized with Git Origin.`);
+      } catch (syncErr) {
+        console.log(`   ⚠️ Webhook active, but failed to sync UI with Dashboard.`);
+      }
       console.log(`   Webhook injected securely pointing to target node.`);
       console.log(`📜 To see logs after each git push run 'monolith logs'\n`);
       
