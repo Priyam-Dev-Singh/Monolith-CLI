@@ -377,6 +377,49 @@ app.delete('/api/env', requireAuth, (req, res) => {
   res.status(200).json({ message: `Variable ${envKey} securely eradicated.` });
 });
 
+// --- ROUTE 4.0: CUSTOM DOMAIN MAPPING ---
+app.post('/api/domain/link', requireAuth, async (req, res) => {
+  const { projectId, customDomain } = req.body;
+  if (!projectId || !customDomain) {
+    return res.status(400).json({ error: 'Missing projectId or customDomain.' });
+  }
+
+  try {
+    // 1. Locate the active container for this workload
+    const { stdout: psOut } = await execAsync(`docker ps -q -f "name=^live_${projectId}_"`);
+    const containerId = psOut.trim().split('\n')[0];
+
+    if (!containerId) {
+       return res.status(400).json({ error: 'No active deployment found. Deploy the app before linking a domain.' });
+    }
+
+    // 2. Extract the active port
+    const { stdout: portBuffer } = await execAsync(`docker inspect --format='{{(index (index .NetworkSettings.Ports "3000/tcp") 0).HostPort}}' ${containerId}`);
+    const assignedPort = portBuffer.toString().trim();
+
+    if (!assignedPort) throw new Error("Failed to extract port from active container.");
+
+    // 3. Rewrite the Caddy Config to accept BOTH the nip.io fallback AND the Custom Domain
+    const nipIoDomain = `${projectId}.20.2.198.46.nip.io`;
+    const caddyDir = path.join(__dirname, 'caddy-configs');
+    
+    // Notice the HTTP prefix on nip.io to prevent SSL attempts on the fallback, 
+    // while the custom domain gets automatic HTTPS provisioning.
+    const caddyConfig = `http://${nipIoDomain}, ${customDomain} {\n  reverse_proxy localhost:${assignedPort}\n}\n`;
+    
+    fs.writeFileSync(path.join(caddyDir, `${projectId}.caddy`), caddyConfig);
+    
+    // 4. Hot-reload the proxy
+    await execAsync('caddy reload --config ./Caddyfile', { cwd: __dirname });
+
+    console.log(`🌍 Domain Linked: ${customDomain} -> ${projectId}`);
+    res.status(200).json({ message: 'Domain mapped successfully. SSL provisioning initiated.', customDomain });
+  } catch (error) {
+    console.error('Domain Linking Error:', error.message);
+    res.status(500).json({ error: 'Failed to map custom domain.' });
+  }
+});
+
 // --- ROUTE 4: DATABASE PROVISIONER ---
 app.post('/api/db', requireAuth, async (req, res) => {
   const { dbName, dbType, projectId } = req.body;
