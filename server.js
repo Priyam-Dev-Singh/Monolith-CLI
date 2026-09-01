@@ -67,7 +67,7 @@ function verifyGitHub(req, res, next) {
   next();
 }
 
-app.post('/api/webhook', verifyGitHub, async (req, res) => { // Added 'async'
+app.post('/api/webhook', verifyGitHub, async (req, res) => {
   const projectId = req.query.projectId;
   if (!projectId) return res.status(400).send('Missing projectId parameter');
 
@@ -93,9 +93,22 @@ app.post('/api/webhook', verifyGitHub, async (req, res) => { // Added 'async'
       await execAsync(`git clone ${repoUrl} ${extractDest}`);
     }
     
-    // 3. Fire the Blue/Green deployment engine
-    // (We don't await this so it runs independently in the background)
-    buildAndDeploy(projectId, extractDest).catch(err => console.error('Build Error:', err));
+    // 3. EXTRACT EXISTING ROUTING STATE
+    // Check if Caddy was already configured with a dual-domain route
+    let customDomain = null;
+    const caddyPath = path.join(__dirname, 'caddy-configs', `${projectId}.caddy`);
+    
+    if (fs.existsSync(caddyPath)) {
+      const firstLine = fs.readFileSync(caddyPath, 'utf8').split('\n')[0];
+      // Format is: http://[project].nip.io, customdomain.com {
+      if (firstLine.includes(',')) {
+        customDomain = firstLine.split(',')[1].split('{')[0].trim();
+        console.log(`📡 Recovered custom domain from routing table: ${customDomain}`);
+      }
+    }
+
+    // 4. Fire the Blue/Green deployment engine with the preserved domain
+    buildAndDeploy(projectId, extractDest, customDomain).catch(err => console.error('Build Error:', err));
     
   } catch (error) {
     console.error('GitHub Deployment Failed:', error.message);
@@ -122,7 +135,7 @@ async function getFreePort(min, max) {
 // FIX 7: Make engine asynchronous
 
 // --- THE BLUE/GREEN DEPLOYMENT ENGINE (WITH X-RAY LOGGING) ---
-async function buildAndDeploy(projectId, extractDest) {
+async function buildAndDeploy(projectId, extractDest, customDomain = null) { // <-- ADDED PARAMETER
   // 1. Initialize the Log Stream File
   const logDir = path.join(__dirname, 'logs');
   if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
@@ -161,7 +174,7 @@ async function buildAndDeploy(projectId, extractDest) {
   try {
     writeLog('⚙️ Engaging Nixpacks Build Engine...');
     
-    // 2. THE PIPELINE SPLIT: Redirects build output to the log file in real-time
+    // 2. THE PIPELINE SPLIT
     await execAsync(`nixpacks build ${buildPath} --name ${imageName} ${nixpacksEnvFlag} >> ${logFile} 2>&1`);
     
     let oldContainers = '';
@@ -186,20 +199,36 @@ async function buildAndDeploy(projectId, extractDest) {
     const { stdout: portBuffer } = await execAsync(`docker inspect --format='{{(index (index .NetworkSettings.Ports "3000/tcp") 0).HostPort}}' ${newContainerName}`);
     const assignedPort = portBuffer.toString().trim();
 
-    const domain = projectId + '.20.2.198.46.nip.io';
+    // --- NEW DOMAIN ROUTING LOGIC ---
+    const nipIoDomain = projectId + '.20.2.198.46.nip.io';
     const caddyDir = path.join(__dirname, 'caddy-configs');
     if (!fs.existsSync(caddyDir)) fs.mkdirSync(caddyDir, { recursive: true });
     
-    fs.writeFileSync(path.join(caddyDir, projectId + '.caddy'), `http://${domain} {\n  reverse_proxy localhost:${assignedPort}\n}\n`);
-    await execAsync('caddy reload --config ./Caddyfile', { cwd: __dirname });
+    let caddyConfig = '';
+    if (customDomain) {
+      writeLog(`🌍 Wiring dual-routes: nip.io & ${customDomain}`);
+      caddyConfig = `http://${nipIoDomain}, ${customDomain} {\n  reverse_proxy localhost:${assignedPort}\n}\n`;
+    } else {
+      caddyConfig = `http://${nipIoDomain} {\n  reverse_proxy localhost:${assignedPort}\n}\n`;
+    }
     
+    fs.writeFileSync(path.join(caddyDir, projectId + '.caddy'), caddyConfig);
+    await execAsync('caddy reload --config ./Caddyfile', { cwd: __dirname });
+    // --------------------------------
+
     if (oldContainers) {
       const ids = oldContainers.split('\n').join(' ');
       writeLog(`Stopping previous versions (Rollback preserved): ${ids}`);
       await execAsync(`docker stop ${ids}`);
     }
 
-    writeLog(`✅ Deployment live: http://${domain}`);
+    // Update final success log to reflect the routing
+    if (customDomain) {
+       writeLog(`✅ Deployment live: http://${nipIoDomain} | https://${customDomain}`);
+    } else {
+       writeLog(`✅ Deployment live: http://${nipIoDomain}`);
+    }
+    
     return domain;
   } catch (error) {
     writeLog(`❌ Build Error: ${error.message}`);
@@ -267,7 +296,7 @@ app.post('/api/webhook', verifyGitHub, (req, res) => {
 
 // --- ROUTE 2.5: THE NEXT.JS DASHBOARD TRIGGER ---
 app.post('/api/dashboard/deploy', async (req, res) => {
-  const { projectId, repoUrl, branch, rootDirectory } = req.body;
+  const { projectId, repoUrl, branch, rootDirectory, customDomain} = req.body;
 
   if (!projectId || !repoUrl) {
     return res.status(400).json({ error: 'Missing projectId or repoUrl' });
@@ -298,7 +327,7 @@ app.post('/api/dashboard/deploy', async (req, res) => {
     }
 
     // 5. Fire your existing Blue/Green Engine in the background
-    buildAndDeploy(projectId, extractDest).catch(err => console.error('Build Error:', err));
+    buildAndDeploy(projectId, extractDest, customDomain).catch(err => console.error('Build Error:', err));
 
   } catch (error) {
     console.error('Dashboard Deployment Failed:', error.message);
