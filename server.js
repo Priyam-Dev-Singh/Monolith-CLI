@@ -216,11 +216,46 @@ async function buildAndDeploy(projectId, extractDest, customDomain = null) { // 
     await execAsync('caddy reload --config ./Caddyfile', { cwd: __dirname });
     // --------------------------------
 
-    if (oldContainers) {
-      const ids = oldContainers.split('\n').join(' ');
-      writeLog(`Stopping previous versions (Rollback preserved): ${ids}`);
-      await execAsync(`docker stop ${ids}`);
+    // --- THE RETENTION ENGINE (5-VERSION HISTORY) ---
+    try {
+      writeLog('🧹 Analyzing historical deployments for cleanup...');
+      const { stdout: containerList } = await execAsync(`docker ps -a --format "{{.Names}}" -f "name=^live_${projectId}_"`);
+      const containers = containerList.trim().split('\n').filter(Boolean);
+      
+      // Sort by timestamp (Highest/Newest first)
+      containers.sort((a, b) => {
+        const tsA = parseInt(a.split('_').pop(), 10);
+        const tsB = parseInt(b.split('_').pop(), 10);
+        return tsB - tsA;
+      });
+
+      // Index 0: The brand new container (currently running)
+      
+      // Indices 1 through 5: The previous 5 containers
+      if (containers.length > 1) {
+        // slice(1, 6) grabs up to 5 historical containers
+        const toSleep = containers.slice(1, 6).join(' ');
+        writeLog(`💤 Sleeping historical versions for rollback safety: ${toSleep}`);
+        await execAsync(`docker stop ${toSleep}`);
+      }
+
+      // Indices 6+: The genuinely obsolete containers (destroy them)
+      if (containers.length > 6) {
+        // slice(6) grabs everything after the 5th backup
+        const toDelete = containers.slice(6).join(' ');
+        writeLog(`🔥 Purging obsolete containers to free memory: ${toDelete}`);
+        await execAsync(`docker rm -f ${toDelete}`);
+      }
+    } catch (cleanupError) {
+      writeLog(`⚠️ Retention cleanup skipped: ${cleanupError.message}`);
     }
+
+    // --- AUTOMATED GARBAGE COLLECTION ---
+    try {
+      writeLog('🗑️ Emptying the trash (removing orphaned blueprints)...');
+      await execAsync('docker image prune -f');
+    } catch (gcError) { }
+    // ------------------------------------
     // --- NEW: AUTOMATED GARBAGE COLLECTION ---
     try {
       writeLog('🧹 Running garbage collection (removing orphaned blueprints)...');
