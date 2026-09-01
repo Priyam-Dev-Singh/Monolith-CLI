@@ -573,41 +573,40 @@ app.post('/api/db', requireAuth, async (req, res) => {
   }
 });
 
-// --- 1. UNIFIED LOG SNAPSHOT (Build + Runtime) ---
+// --- 1. SEPARATED LOG SNAPSHOT (Build & Runtime) ---
 app.get('/api/logs/snapshot', requireAuth, async (req, res) => {
   const { projectId } = req.query;
-  if (!projectId) return res.status(400).send('Invalid projectId');
+  if (!projectId) return res.status(400).json({ error: 'Invalid projectId' });
 
   try {
-    let combinedLogs = [];
+    let buildLogs = '[SYSTEM] Awaiting initial deployment sequence...';
+    let runtimeLogs = '[SYSTEM] No active runtime container detected.';
 
-    // A. Read last 100 lines of the Build Log
+    // A. Read Build Logs
     const logFile = path.join(__dirname, 'logs', `${projectId}.log`);
     if (fs.existsSync(logFile)) {
-      const { stdout: buildLogs } = await execAsync(`tail -n 100 ${logFile}`);
-      combinedLogs.push('--- BUILD LOGS ---');
-      combinedLogs.push(buildLogs.trim());
-    } else {
-      combinedLogs.push('[SYSTEM] Awaiting initial deployment sequence...');
+      const fileContent = fs.readFileSync(logFile, 'utf8');
+      buildLogs = fileContent.split('\n').slice(-100).join('\n').trim();
     }
 
-    // B. Read last 50 lines of the Active Docker Container
+    // B. Read Active Docker Container Logs
     try {
       const { stdout: psOut } = await execAsync(`docker ps -q -f "name=^live_${projectId}_"`);
       const containerId = psOut.trim().split('\n')[0];
       
       if (containerId) {
-        const { stdout: runtimeLogs } = await execAsync(`docker logs --tail 50 ${containerId}`);
-        combinedLogs.push('\n--- RUNTIME LOGS ---');
-        combinedLogs.push(runtimeLogs.trim());
+        const { stdout: rtLogs } = await execAsync(`docker logs --tail 50 ${containerId}`);
+        runtimeLogs = rtLogs.trim();
       }
     } catch (e) {
-      combinedLogs.push('\n[SYSTEM] No active runtime container detected.');
+      // Keep default runtime logs message if no container exists
     }
 
-    res.send(combinedLogs.join('\n'));
+    // Return as separate JSON fields
+    res.json({ buildLogs, runtimeLogs });
   } catch (error) {
-    res.status(500).send(`[ERROR] Failed to fetch logs: ${error.message}`);
+    console.error('Log fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch logs' });
   }
 });
 
