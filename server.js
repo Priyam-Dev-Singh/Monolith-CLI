@@ -229,7 +229,7 @@ async function buildAndDeploy(projectId, extractDest, customDomain = null) { // 
        writeLog(`✅ Deployment live: http://${nipIoDomain}`);
     }
     
-    return domain;
+    return nipIoDomain;
   } catch (error) {
     writeLog(`❌ Build Error: ${error.message}`);
     throw error;
