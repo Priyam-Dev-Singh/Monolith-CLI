@@ -221,6 +221,16 @@ async function buildAndDeploy(projectId, extractDest, customDomain = null) { // 
       writeLog(`Stopping previous versions (Rollback preserved): ${ids}`);
       await execAsync(`docker stop ${ids}`);
     }
+    // --- NEW: AUTOMATED GARBAGE COLLECTION ---
+    try {
+      writeLog('🧹 Running garbage collection (removing orphaned blueprints)...');
+      // This deletes any <none> images taking up disk space, 
+      // but safely keeps the images currently being used by active or rolled-back containers.
+      await execAsync('docker image prune -f');
+    } catch (cleanupError) {
+      console.error('Garbage collection warning:', cleanupError.message);
+    }
+    // -----------------------------------------
 
     // Update final success log to reflect the routing
     if (customDomain) {
