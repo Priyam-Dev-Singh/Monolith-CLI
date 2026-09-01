@@ -628,6 +628,56 @@ app.get('/api/containers/history', requireAuth, async (req, res) => {
   }
 });
 
+// --- 3. CLI RAW STREAM (For Terminal Output) ---
+app.get('/api/logs/stream', requireAuth, async (req, res) => {
+  const { projectId, type } = req.query;
+  if (!projectId) return res.status(400).send('Invalid projectId');
+
+  // Keep the HTTP connection open indefinitely
+  res.setHeader('Content-Type', 'text/plain');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+
+  const sendToStream = (data) => res.write(data.toString());
+  let processTarget = null;
+
+  try {
+    if (type === 'build') {
+      // Stream the raw log file
+      const logFile = path.join(__dirname, 'logs', `${projectId}.log`);
+      if (fs.existsSync(logFile)) {
+        processTarget = spawn('tail', ['-n', '100', '-f', logFile]);
+      } else {
+        res.write('[SYSTEM] No build logs found for this project.\n');
+        return res.end();
+      }
+    } else if (type === 'runtime') {
+      // Stream the live Docker container
+      const { stdout } = await execAsync(`docker ps -q -f "name=^live_${projectId}_"`);
+      const containerId = stdout.trim().split('\n')[0];
+      
+      if (containerId) {
+        processTarget = spawn('docker', ['logs', '-f', '--tail', '50', containerId]);
+      } else {
+        res.write('[SYSTEM] No active runtime container detected.\n');
+        return res.end();
+      }
+    }
+
+    // Attach stream listeners
+    if (processTarget) {
+      processTarget.stdout.on('data', sendToStream);
+      processTarget.stderr.on('data', sendToStream);
+      
+      // Kill the child process cleanly if the user hits Ctrl+C in their CLI
+      req.on('close', () => processTarget.kill());
+    }
+  } catch (error) {
+    res.write(`\n[SYSTEM] Stream Error: ${error.message}\n`);
+    res.end();
+  }
+});
+
 // --- ROLLBACK ENGINE ---
 app.post('/api/rollback', requireAuth, async (req, res) => {
   const { projectId } = req.body;

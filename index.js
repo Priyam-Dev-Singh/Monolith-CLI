@@ -1089,34 +1089,48 @@ program
   });
 
 program
-  .command('logs')
-  .description('Stream live application logs directly from the server')
-  .action(async () => {
+.command('logs')
+.description('Stream live application logs directly from the server')
+.action(async () => {
     const configPath = path.join(process.cwd(), '.monolith', 'project.json');
     if (!fs.existsSync(configPath)) return console.error("\n❌ Not a Monolith project.");
     
-    const config = JSON.parse(fs.readFileSync(configPath));
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     const activeProjectId = config.id || config.projectId;
 
-    console.log('\n📡 Acquiring telemetry stream coordinates...');
+    // 1. Create a native terminal selector
+    const readline = require('readline').createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+    console.log('\n[1] 🏗️  Build Stream (Nixpacks Compilation)');
+    console.log('[2] 🟢 Runtime Stream (Live Docker Container)\n');
     
-    try {
-      const target = await resolveTarget(activeProjectId);
-      console.log(`🔗 Target locked. Connecting to live Docker stream at ${target.url}... (Press Ctrl+C to exit)\n`);
+    readline.question('Select target stream (1 or 2): ', async (answer) => {
+      readline.close();
+      const type = answer.trim() === '1' ? 'build' : 'runtime';
+      const typeLabel = type === 'build' ? 'BUILD' : 'RUNTIME';
 
-      console.log(`[DEBUG] Transmitting to: ${target.url}/api/logs/stream?projectId=${activeProjectId}`);
+      console.log('\n📡 Acquiring telemetry stream coordinates...');
+      
+      try {
+        const target = await resolveTarget(activeProjectId);
+        console.log(`🔗 Target locked. Streaming live ${typeLabel} logs from ${target.url}... (Press Ctrl+C to exit)\n`);
 
-      const res = await axios({
-        method: 'get',
-        url: `${target.url}/api/logs/stream?projectId=${activeProjectId}`,
-        headers: { 'x-api-key': target.apiKey },
-        responseType: 'stream' 
-      });
+        // Send the type parameter to the Azure streaming engine
+        const res = await axios({
+          method: 'get',
+          url: `${target.url}/api/logs/stream?projectId=${activeProjectId}&type=${type}`,
+          headers: { 'x-api-key': target.apiKey },
+          responseType: 'stream' 
+        });
 
-      res.data.on('data', chunk => process.stdout.write(chunk));
-    } catch (err) {
-      console.error('\n❌ Log stream failed:', err.message);
-    }
-  });
+        res.data.on('data', chunk => process.stdout.write(chunk));
+      } catch (err) {
+        console.error('\n❌ Log stream failed:', err.message);
+      }
+    });
+});
 
 program.parse(process.argv);
