@@ -573,51 +573,60 @@ app.post('/api/db', requireAuth, async (req, res) => {
   }
 });
 
-// --- UNIFIED TELEMETRY STREAM (BUILD + RUNTIME) ---
-app.get('/api/logs/stream', requireAuth, async (req, res) => {
-  const projectId = req.query.projectId;
+// --- 1. UNIFIED LOG SNAPSHOT (Build + Runtime) ---
+app.get('/api/logs/snapshot', requireAuth, async (req, res) => {
+  const { projectId } = req.query;
   if (!projectId) return res.status(400).send('Invalid projectId');
 
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-
-  // 1. Ensure the log file exists so the stream doesn't crash on a fresh project
-  const logDir = path.join(__dirname, 'logs');
-  if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
-  const logFile = path.join(logDir, `${projectId}.log`);
-  if (!fs.existsSync(logFile)) fs.writeFileSync(logFile, '[SYSTEM] Telemetry stream initialized.\n');
-
-  const sendToStream = (data, prefix = '') => {
-    const lines = data.toString().split('\n');
-    lines.forEach(line => {
-      if (line.trim()) res.write(`data: ${prefix}${line}\n\n`);
-    });
-  };
-
-  // 2. TACTICAL TAIL: Stream the Build Logs (The file)
-  const tailProcess = spawn('tail', ['-n', '100', '-f', logFile]);
-  tailProcess.stdout.on('data', data => sendToStream(data));
-  tailProcess.stderr.on('data', data => sendToStream(data, '[WARN] '));
-
-  // 3. ENGINE ATTACHMENT: Stream the Runtime Logs (The Docker Container)
-  let dockerProcess = null;
   try {
-    const { stdout } = await execAsync(`docker ps -q -f "name=live_${projectId}"`);
-    const containerId = stdout.trim().split('\n')[0]; // Grab the most recent if multiple exist
-    
-    if (containerId) {
-      dockerProcess = spawn('docker', ['logs', '-f', '--tail', '50', containerId]);
-      dockerProcess.stdout.on('data', data => sendToStream(data, '[RUNTIME] '));
-      dockerProcess.stderr.on('data', data => sendToStream(data, '[RUNTIME ERR] '));
-    }
-  } catch (err) {}
+    let combinedLogs = [];
 
-  // 4. CLEANUP: Sever the connections if the user closes the dashboard tab
-  req.on('close', () => {
-    tailProcess.kill();
-    if (dockerProcess) dockerProcess.kill();
-  });
+    // A. Read last 100 lines of the Build Log
+    const logFile = path.join(__dirname, 'logs', `${projectId}.log`);
+    if (fs.existsSync(logFile)) {
+      const { stdout: buildLogs } = await execAsync(`tail -n 100 ${logFile}`);
+      combinedLogs.push('--- BUILD LOGS ---');
+      combinedLogs.push(buildLogs.trim());
+    } else {
+      combinedLogs.push('[SYSTEM] Awaiting initial deployment sequence...');
+    }
+
+    // B. Read last 50 lines of the Active Docker Container
+    try {
+      const { stdout: psOut } = await execAsync(`docker ps -q -f "name=^live_${projectId}_"`);
+      const containerId = psOut.trim().split('\n')[0];
+      
+      if (containerId) {
+        const { stdout: runtimeLogs } = await execAsync(`docker logs --tail 50 ${containerId}`);
+        combinedLogs.push('\n--- RUNTIME LOGS ---');
+        combinedLogs.push(runtimeLogs.trim());
+      }
+    } catch (e) {
+      combinedLogs.push('\n[SYSTEM] No active runtime container detected.');
+    }
+
+    res.send(combinedLogs.join('\n'));
+  } catch (error) {
+    res.status(500).send(`[ERROR] Failed to fetch logs: ${error.message}`);
+  }
+});
+
+// --- 2. CONTAINER HISTORY (For Rollback UI) ---
+app.get('/api/containers/history', requireAuth, async (req, res) => {
+  const { projectId } = req.query;
+  try {
+    const { stdout } = await execAsync(`docker ps -a --format "{{.Names}}|{{.State}}|{{.Status}}" -f "name=^live_${projectId}_"`);
+    
+    const containers = stdout.trim().split('\n').filter(Boolean).map(line => {
+      const [name, state, status] = line.split('|');
+      const timestamp = parseInt(name.split('_').pop(), 10);
+      return { name, state, status, timestamp };
+    }).sort((a, b) => b.timestamp - a.timestamp); // Sort newest first
+
+    res.json({ history: containers });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch container telemetry.' });
+  }
 });
 
 // --- ROLLBACK ENGINE ---
