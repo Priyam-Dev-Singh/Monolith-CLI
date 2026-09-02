@@ -1061,6 +1061,78 @@ program
   });
 
 program
+  .command('status')
+  .description('Perform a full diagnostic health check on the active project')
+  .action(async () => {
+    const configPath = path.join(process.cwd(), '.monolith', 'project.json');
+    if (!fs.existsSync(configPath)) return console.error("\n❌ Not a Monolith project. Run 'monolith init' first.");
+    
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const activeProjectId = config.id || config.projectId;
+
+    console.log(`\n🔍 Initiating diagnostic scan for [${activeProjectId}]...`);
+    
+    try {
+      const target = await resolveTarget(activeProjectId);
+      console.log(`📡 Interfacing with Execution Node at ${target.url}\n`);
+
+      // Fetch Application and Database states in parallel
+      const [listRes, historyRes] = await Promise.all([
+        axios.get(`${target.url}/api/list?projectId=${activeProjectId}`, { headers: { 'x-api-key': target.apiKey } }),
+        axios.get(`${target.url}/api/containers/history?projectId=${activeProjectId}`, { headers: { 'x-api-key': target.apiKey } })
+      ]);
+
+      const dbs = listRes.data.dbs || [];
+      const history = historyRes.data.history || [];
+
+      // Split containers into Active vs Sleeping (Rollbacks)
+      const activeContainers = history.filter(c => c.status.toLowerCase().includes("up") || c.state === "running");
+      const rollbackTargets = history.filter(c => c.status.toLowerCase().includes("exited") || c.state === "exited");
+
+      // --- 1. WORKLOAD HEALTH ---
+      console.log('📦 [ACTIVE WORKLOADS]');
+      if (activeContainers.length === 0) {
+        console.log('   ⚠️  OFFLINE: No running containers detected.');
+      } else {
+        activeContainers.forEach(c => {
+          console.log(`   🟢 ${c.name}`);
+          console.log(`      State:  ${c.state.toUpperCase()}`);
+          console.log(`      Uptime: ${c.status}`);
+        });
+      }
+
+      // --- 2. RETENTION ENGINE STATE ---
+      console.log('\n⏪ [RETENTION ENGINE & ROLLBACKS]');
+      if (rollbackTargets.length === 0) {
+        console.log('   ⚠️  No historical snapshots available.');
+      } else {
+        console.log(`   🛡️  ${rollbackTargets.length} sleeping container(s) safely preserved in memory.`);
+        console.log(`   🎯 Primary Rollback Target: ${rollbackTargets[0].name}`);
+        console.log(`      Forged: ${new Date(rollbackTargets[0].timestamp).toLocaleString()}`);
+      }
+
+      // --- 3. DATABASE INFRASTRUCTURE ---
+      console.log('\n🗄️  [ATTACHED DATABASES]');
+      if (dbs.length === 0) {
+        console.log('   ⚠️  No databases linked to this project.');
+      } else {
+        dbs.forEach(db => {
+          // Extracts the name and port based on your typical database telemetry
+          const dbName = db.name || 'Unnamed DB';
+          const dbStatus = db.status && db.status.includes('Up') ? '🟢 ONLINE' : '🔴 OFFLINE';
+          console.log(`   ${dbStatus} | ${dbName}`);
+          if (db.port) console.log(`               Port: ${db.port}`);
+        });
+      }
+
+      console.log('\n✅ Diagnostic scan complete.\n');
+
+    } catch (err) {
+      console.error('\n❌ Status check failed:', err.response?.data?.error || err.message);
+    }
+  });
+
+program
   .command('guide')
   .description('Display the Monolith quick-start guide and architecture flow')
   .action(() => {
