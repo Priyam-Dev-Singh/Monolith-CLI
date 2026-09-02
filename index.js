@@ -1098,14 +1098,17 @@ program
       const target = await resolveTarget(activeProjectId);
       console.log(`📡 Interfacing with Execution Node at ${target.url}\n`);
 
-      // Fetch Application and Database states in parallel
-      const [listRes, historyRes] = await Promise.all([
+      // Fetch Application, Database, and Vault states in parallel
+      const [listRes, historyRes, envRes] = await Promise.all([
         axios.get(`${target.url}/api/list?projectId=${activeProjectId}`, { headers: { 'x-api-key': target.apiKey } }),
-        axios.get(`${target.url}/api/containers/history?projectId=${activeProjectId}`, { headers: { 'x-api-key': target.apiKey } })
+        axios.get(`${target.url}/api/containers/history?projectId=${activeProjectId}`, { headers: { 'x-api-key': target.apiKey } }),
+        axios.get(`${target.url}/api/env?projectId=${activeProjectId}`, { headers: { 'x-api-key': target.apiKey } })
       ]);
 
       const dbs = listRes.data.dbs || [];
       const history = historyRes.data.history || [];
+      const envs = envRes.data.envs || {};
+      const envKeys = Object.keys(envs);
 
       // Split containers into Active vs Sleeping (Rollbacks)
       const activeContainers = history.filter(c => c.status.toLowerCase().includes("up") || c.state === "running");
@@ -1123,7 +1126,18 @@ program
         });
       }
 
-      // --- 2. RETENTION ENGINE STATE ---
+      // --- 2. SECURE ENVIRONMENT VAULT ---
+      console.log('\n🔒 [SECURE ENVIRONMENT VAULT]');
+      if (envKeys.length === 0) {
+        console.log('   ⚠️  Vault is empty. No environment variables injected.');
+      } else {
+        console.log(`   🛡️  ${envKeys.length} secret(s) secured in the remote vault:`);
+        envKeys.forEach(key => {
+          console.log(`   🔑 ${key}`);
+        });
+      }
+
+      // --- 3. RETENTION ENGINE STATE ---
       console.log('\n⏪ [RETENTION ENGINE & ROLLBACKS]');
       if (rollbackTargets.length === 0) {
         console.log('   ⚠️  No historical snapshots available.');
@@ -1133,13 +1147,12 @@ program
         console.log(`      Forged: ${new Date(rollbackTargets[0].timestamp).toLocaleString()}`);
       }
 
-      // --- 3. DATABASE INFRASTRUCTURE ---
+      // --- 4. DATABASE INFRASTRUCTURE ---
       console.log('\n🗄️  [ATTACHED DATABASES]');
       if (dbs.length === 0) {
         console.log('   ⚠️  No databases linked to this project.');
       } else {
         dbs.forEach(db => {
-          // Extracts the name and port based on your typical database telemetry
           const dbName = db.name || 'Unnamed DB';
           const dbStatus = db.status && db.status.includes('Up') ? '🟢 ONLINE' : '🔴 OFFLINE';
           console.log(`   ${dbStatus} | ${dbName}`);
