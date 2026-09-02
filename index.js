@@ -99,36 +99,58 @@ program
   });
 
 program
-  .command('env:set <keyValue>')
-  .description('Set an environment variable (e.g., monolith env set API_KEY=123)')
-  .action(async (keyValue) => {
+  .command('env:set')
+  .description('Interactively securely inject an environment variable into the remote vault')
+  .action(async () => {
     const configPath = path.join(process.cwd(), '.monolith', 'project.json');
-    if (!fs.existsSync(configPath)) return console.error("❌ Run 'monolith init' first.");
+    if (!fs.existsSync(configPath)) return console.error("\n❌ Not a Monolith project. Run 'monolith init' first.");
     
-    const config = JSON.parse(fs.readFileSync(configPath));
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     const activeProjectId = config.id || config.projectId;
     
-    const [key, ...valueParts] = keyValue.split('=');
-    const value = valueParts.join('='); 
+    const readline = require('readline').createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
 
-    const spinner = ora('Updating secure vault...').start();
-    try {
-      // 1. Acquire Target
-      const target = await resolveTarget(activeProjectId);
+    console.log('\n🔒 [VAULT INJECTION PROTOCOL]');
+    
+    // Prompt 1: The Key
+    readline.question('Enter the variable KEY (e.g., API_KEY): ', (rawKey) => {
+      // Auto-format the key for safety (Uppercase + Underscores)
+      const key = rawKey.trim().toUpperCase().replace(/\s+/g, '_');
       
-      // 2. Fire Payload with specific API Key
-      const response = await axios.post(`${target.url}/api/env`, {
-        projectId: activeProjectId,
-        envs: { [key]: value }
-      }, {
-        headers: { 'x-api-key': target.apiKey }
+      if (!key) {
+        console.log('❌ Key cannot be empty. Aborting.');
+        return readline.close();
+      }
+
+      // Prompt 2: The Value
+      readline.question(`Enter the VALUE for [${key}]: `, async (value) => {
+        readline.close();
+        
+        console.log(''); // Spacing
+        const spinner = ora('Updating secure remote vault...').start();
+        
+        try {
+          // 1. Acquire Target Coordinates
+          const target = await resolveTarget(activeProjectId);
+          
+          // 2. Fire Payload (Azure node will append/merge this into the existing .env file)
+          const response = await axios.post(`${target.url}/api/env`, {
+            projectId: activeProjectId,
+            envs: { [key]: value }
+          }, {
+            headers: { 'x-api-key': target.apiKey }
+          });
+          
+          spinner.succeed(`✅ Secret [${key}] securely locked into the vault.`);
+          console.log(`⚠️  SYSTEM NOTE: You must redeploy the application for the container to reflect this change.\n`);
+        } catch (error) {
+          spinner.fail("❌ Failed to secure variable: " + (error.response?.data?.error || error.message));
+        }
       });
-      
-      spinner.succeed('✅ ENV variable was set successfully\n');
-      console.log(`✅ ${response.data.message}`);
-    } catch (error) {
-      spinner.fail("❌ Failed to secure variable: " + (error.response?.data?.error || error.message));
-    }
+    });
   });
 
 program
