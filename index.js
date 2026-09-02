@@ -132,6 +132,74 @@ program
   });
 
 program
+  .command('env:rm')
+  .description('Tactically eradicate an environment variable from the remote vault')
+  .action(async () => {
+    const configPath = path.join(process.cwd(), '.monolith', 'project.json');
+    if (!fs.existsSync(configPath)) return console.error("\n❌ Not a Monolith project.");
+    
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const activeProjectId = config.id || config.projectId;
+
+    console.log('\n📡 Interfacing with secure remote vault...');
+    
+    try {
+      const target = await resolveTarget(activeProjectId);
+
+      // 1. Fetch current contents of the vault
+      const fetchRes = await axios.get(`${target.url}/api/env?projectId=${activeProjectId}`, {
+        headers: { 'x-api-key': target.apiKey }
+      });
+
+      const envs = fetchRes.data.envs || {};
+      const keys = Object.keys(envs);
+
+      if (keys.length === 0) {
+        return console.log('\n🛡️  Vault is currently empty. Nothing to delete.');
+      }
+
+      // 2. Display the tactical selector
+      console.log('\n[ACTIVE VAULT VARIABLES]');
+      keys.forEach((key, index) => {
+        console.log(`[${index + 1}] ${key}`);
+      });
+      console.log(`[0] Cancel Operation\n`);
+
+      const readline = require('readline').createInterface({
+        input: process.stdin,
+        output: process.stdout
+      });
+
+      // 3. Process the deletion
+      readline.question('Select target key for eradication (number): ', async (answer) => {
+        readline.close();
+        
+        const selection = parseInt(answer.trim(), 10);
+        
+        if (selection === 0 || isNaN(selection) || selection < 1 || selection > keys.length) {
+          return console.log('\n🛑 Operation aborted.');
+        }
+
+        const targetKey = keys[selection - 1];
+        console.log(`\n🔥 Initiating purge for ${targetKey}...`);
+
+        await axios({
+          method: 'delete',
+          url: `${target.url}/api/env`,
+          headers: { 'x-api-key': target.apiKey },
+          data: { projectId: activeProjectId, envKey: targetKey }
+        });
+
+        console.log(`✅ Target [${targetKey}] successfully eradicated from Azure.`);
+        console.log(`⚠️  SYSTEM NOTE: You must redeploy the application for the container to reflect this change.`);
+      });
+
+    } catch (err) {
+      console.error('\n❌ Vault access failed:', err.response?.data?.error || err.message);
+    }
+  }); 
+
+program
   .command('db:create <dbName>')
   .description('Provision a new database (e.g., monolith db:create study_db)')
   .action(async (dbName) => {
