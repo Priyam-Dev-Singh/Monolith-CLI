@@ -8,4 +8,4 @@ Deploy, manage, and monitor your Dockerized workloads on your own infrastructure
 Install the CLI globally via NPM:
 
 ```bash
-npm install -g <your-package-name>
+npm install -g monolith-engine
