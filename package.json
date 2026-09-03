@@ -1,5 +1,5 @@
 {
-  "name": "monolith-cli",
+  "name": "monolith-engine",
   "version": "1.0.0",
   "description": "Command line deployment tool",
   "main": "index.js",
