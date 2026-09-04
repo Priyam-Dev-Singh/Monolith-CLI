@@ -1168,38 +1168,78 @@ program
 
 program
   .command('guide')
-  .description('Display the Monolith quick-start guide and architecture flow')
-  .action(() => {
-    // --- Color helpers (raw ANSI, no extra deps needed) ---
-    const bold   = (s) => `\x1b[1m${s}\x1b[0m`;
-    const dim    = (s) => `\x1b[2m${s}\x1b[0m`;
-    const cyan   = (s) => `\x1b[36m${s}\x1b[0m`;
-    const yellow = (s) => `\x1b[33m${s}\x1b[0m`;
-    const green  = (s) => `\x1b[32m${s}\x1b[0m`;
-    const gray   = (s) => `\x1b[90m${s}\x1b[0m`;
-    const red    = (s) => `\x1b[31m${s}\x1b[0m`;
-
+  .description('Interactive animated walkthrough: login flow, deployment pipeline, and per-command failure diagnostics')
+  .action(async () => {
+    // ================= COLOR + FX HELPERS (raw ANSI, zero new deps) =================
+    const esc     = (c, s) => `\x1b[${c}m${s}\x1b[0m`;
+    const bold    = (s) => esc(1, s);
+    const dim     = (s) => esc(2, s);
+    const cyan    = (s) => esc(36, s);
+    const yellow  = (s) => esc(33, s);
+    const green   = (s) => esc(32, s);
+    const gray    = (s) => esc(90, s);
+    const red     = (s) => esc(31, s);
+    const magenta = (s) => esc(35, s);
+    const blue    = (s) => esc(94, s);
+ 
+    const isTTY = Boolean(process.stdout.isTTY);
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const WIDTH = 68;
-    const rule = () => gray('─'.repeat(WIDTH));
-
-    const asciiArt = `
-███╗   ███╗ ██████╗ ███╗   ██╗ ██████╗ ██╗     ██╗████████╗██╗  ██╗
-████╗ ████║██╔═══██╗████╗  ██║██╔═══██╗██║     ██║╚══██╔══╝██║  ██║
-██╔████╔██║██║   ██║██╔██╗ ██║██║   ██║██║     ██║   ██║   ███████║
-██║╚██╔╝██║██║   ██║██║╚██╗██║██║   ██║██║     ██║   ██║   ██╔══██║
-██║ ╚═╝ ██║╚██████╔╝██║ ╚████║╚██████╔╝███████╗██║   ██║   ██║  ██║
-╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝   ╚═╝  ╚═╝
-`;
-
-    console.log(bold(asciiArt));
-    console.log('  ' + bold('YOUR SERVER. NO MIDDLEMEN.') + '   ' + dim('v1.0.0'));
+    const rule = (color = gray) => color('─'.repeat(WIDTH));
+ 
+    // Typewriter effect — degrades to instant print when piped/non-interactive
+    async function typeLine(text, delay = 5) {
+      if (!isTTY) { console.log(text); return; }
+      for (const ch of text) { process.stdout.write(ch); await sleep(delay); }
+      process.stdout.write('\n');
+    }
+ 
+    // ================= BOOT ANIMATION =================
+    const asciiArt = [
+      '███╗   ███╗ ██████╗ ███╗   ██╗ ██████╗ ██╗     ██╗████████╗██╗  ██╗',
+      '████╗ ████║██╔═══██╗████╗  ██║██╔═══██╗██║     ██║╚══██╔══╝██║  ██║',
+      '██╔████╔██║██║   ██║██╔██╗ ██║██║   ██║██║     ██║   ██║   ███████║',
+      '██║╚██╔╝██║██║   ██║██║╚██╗██║██║   ██║██║     ██║   ██║   ██╔══██║',
+      '██║ ╚═╝ ██║╚██████╔╝██║ ╚████║╚██████╔╝███████╗██║   ██║   ██║  ██║',
+      '╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝   ╚═╝  ╚═╝',
+    ];
+    const gradient = [cyan, cyan, blue, blue, magenta, magenta]; // vertical gradient
+ 
+    console.log('');
+    for (let i = 0; i < asciiArt.length; i++) {
+      console.log(gradient[i](asciiArt[i]));
+      if (isTTY) await sleep(30);
+    }
+    console.log('');
+    await typeLine('  ' + bold('YOUR SERVER. NO MIDDLEMEN.') + '   ' + dim('v1.0.0'), 4);
     console.log(rule());
-
-    // ---------- PIPELINE ----------
+ 
+    const bootSpinner = ora({ text: dim('Compiling guide modules...'), color: 'cyan' }).start();
+    await sleep(isTTY ? 450 : 0);
+    bootSpinner.succeed(dim('Guide modules loaded.'));
+ 
+    // ================= STEP 0: ACCOUNT + PAT (the part people always ask about) =================
+    console.log('\n' + rule());
+    console.log('\n  ' + bold(yellow('🔑 BEFORE YOU START — GET YOUR PERSONAL ACCESS TOKEN')) + '\n');
+    const patSteps = [
+      ['1.', 'Open your Monolith Web Dashboard in a browser and log in (or create an account).'],
+      ['2.', 'Go to Account / Settings → Personal Access Tokens → Generate New Token.'],
+      ['3.', 'Copy the token — this is your PAT. It is shown once, treat it like a password.'],
+      ['4.', 'Back in this terminal, authenticate the CLI with it:'],
+    ];
+    for (const [n, text] of patSteps) {
+      console.log(`  ${yellow(n)} ${text}`);
+    }
+    console.log(`\n      ${cyan('$ monolith login --token <YOUR_PAT> --url <YOUR_DASHBOARD_URL>')}`);
+    console.log(`      ${gray("(--url defaults to http://localhost:3000 if you don't pass it)")}`);
+    console.log(`\n  ${dim('Your PAT + dashboard URL are saved locally to')} ${cyan('~/.monolith/auth.json')} ${dim('(mode 0600).')}`);
+    console.log(`  ${dim('Every other command reads that file automatically — you only log in once per machine.')}`);
+ 
+    // ================= THE PIPELINE =================
+    console.log('\n' + rule());
     console.log('\n  ' + bold(yellow('⚡ THE PIPELINE')) + '\n');
-
-    const circled = ['①', '②', '③', '④'];
-
+ 
+    const circled = ['①', '②', '③', '④', '⑤'];
     function step(i, title, tag, cmd, desc, isLast) {
       const label = tag ? `${title}  ${dim('(' + tag + ')')}` : title;
       console.log(`  ${yellow(circled[i - 1])}  ${bold(label)}`);
@@ -1210,54 +1250,275 @@ program
         console.log(gray('      ▼'));
       }
     }
-
-    step(1, 'SETUP', null, 'monolith init <project-name>',
-      'Detects your framework, injects build scripts, writes .gitignore');
-    step(2, 'PROVISION', 'optional', 'monolith db:create <db-name>',
+ 
+    step(1, 'REGISTER HARDWARE', 'once per server', 'monolith server:add',
+      'Tells Monolith about a server you own — name, public IP, and its agent key');
+    step(2, 'SETUP', null, 'monolith init <project-name>',
+      'Detects your framework, injects build scripts, tethers to one of your servers');
+    step(3, 'PROVISION', 'optional', 'monolith db:create <db-name>',
       'Spins up Postgres / MySQL / Mongo / Redis, auto-linked to your vault');
-    step(3, 'SECRETS', 'optional', 'monolith env:set KEY=value',
-      'Encrypts and stores an environment variable on the server');
-
-    console.log(`  ${yellow(circled[3])}  ${bold('DEPLOY')}`);
+    step(4, 'SECRETS', 'optional', 'monolith env:set',
+      'Encrypts and stores an environment variable on the tethered server');
+ 
+    console.log(`  ${yellow(circled[4])}  ${bold('DEPLOY')}`);
     console.log(`      ${gray('├─')} ${green('Manual')}      ${cyan('$ monolith deploy')}`);
     console.log(`      ${gray('│')}                 ${gray('Pack & ship on demand, whenever you want')}`);
     console.log(`      ${gray('└─')} ${green('Automatic')}   ${cyan('$ monolith github:connect')}`);
     console.log(`      ${' '.repeat(17)}${gray('Deploys automatically on every `git push`')}`);
-
+ 
     console.log('\n' + rule());
-
-    // ---------- COMMAND REFERENCE ----------
-    console.log('\n  ' + bold(yellow('📖 COMMAND REFERENCE')));
-
-    const CMD_COL = 40;
-    const row = (cmd, desc) => {
-      const padded = cmd.padEnd(CMD_COL, ' ');
-      console.log(`  ${cyan(padded)}${gray(desc)}`);
-    };
-    const section = (title) => console.log('\n  ' + dim(title));
-
-    section('SETUP');
-    row('init <project-name>', 'Initialize a project in the current directory');
-
-    section('INFRASTRUCTURE');
-    row('db:create <db-name>', 'Provision a database, auto-link it to the vault');
-    row('db:destroy <container-name>', 'Permanently delete a database');
-
-    section('SECRETS');
-    row('env:set KEY=value', 'Store an encrypted environment variable');
-
-    section('DEPLOYMENT');
-    row('deploy', 'Pack the current directory and ship it manually');
-    row('github:connect', 'Wire up automatic deploy-on-push CI/CD');
-    row('rollback', 'Instantly revert to the previous working deployment');
-
-    section('OPERATIONS');
-    row('list', 'View all active applications and databases');
-    row('logs', 'Stream live application logs in real time');
-
-    section('DESTRUCTIVE');
-    console.log(`  ${red('destroy [project-id]'.padEnd(CMD_COL, ' '))}${gray('Permanently eradicate a project and its resources')}`);
-
+ 
+    // ================= COMMAND DATA (grounded in what the CLI actually does) =================
+    const SECTIONS = [
+      {
+        title: 'ACCOUNT & AUTH',
+        cmds: [
+          {
+            cmd: 'login', usage: 'monolith login --token <PAT> [--url <dashboardUrl>]',
+            desc: 'Authenticates this machine with your Monolith account using the PAT from the web dashboard. Writes ~/.monolith/auth.json.',
+            why: [
+              "--token wasn't provided — it's a required flag, there's no interactive fallback for it.",
+              'The PAT was pasted with extra whitespace or a trailing newline.',
+              "--url points at the wrong dashboard (silently defaults to http://localhost:3000 if you omit it).",
+              "No write permission to your home directory, so ~/.monolith/auth.json can't be created.",
+            ],
+          },
+          {
+            cmd: 'link', usage: 'monolith link',
+            desc: 'Lists every project on your account and tethers the current folder to one of them, without re-running init.',
+            why: [
+              'Not logged in yet — auth.json is missing or empty. Run `monolith login` first.',
+              'Dashboard is unreachable (network, firewall, or the dashboard process is down).',
+              "Your account has zero projects yet — projects are created via `monolith init`, so there's nothing to list.",
+              'You typed a selection number outside the printed range.',
+            ],
+          },
+        ],
+      },
+      {
+        title: 'INFRASTRUCTURE',
+        cmds: [
+          {
+            cmd: 'server:add', usage: 'monolith server:add',
+            desc: "Registers one of your own machines (BYOC node) by public IP and its agent's x-api-key, so projects can tether to it.",
+            why: [
+              'Not logged in — run `monolith login` first.',
+              "The IP address isn't reachable from the Control Plane, or a firewall blocks the agent's port.",
+              "The x-api-key doesn't match what the Monolith agent on that server expects.",
+              'A node with that tactical name already exists on your account.',
+            ],
+          },
+          {
+            cmd: 'init', usage: 'monolith init <project-name>',
+            desc: 'Creates a new project, registers it with the Control Plane, and lets you tether it to one of your BYOC servers.',
+            why: [
+              'Project name has characters outside [A-Za-z0-9_-] — spaces and slashes are rejected.',
+              'A .monolith/project.json already exists in this folder from a previous init.',
+              'Not logged in — the Control Plane sync fails immediately without a token.',
+              'No servers registered yet: init still succeeds, but the project stays untethered until you attach hardware.',
+              "If you entered a build directory, that folder doesn't actually exist relative to where you ran the command.",
+            ],
+          },
+          {
+            cmd: 'db:create', usage: 'monolith db:create <db-name>',
+            desc: "Provisions Postgres / MySQL / Redis / MongoDB on the project's tethered server and auto-injects the connection string into the vault.",
+            why: [
+              'Project is untethered — no target server assigned, so there is nothing to provision on.',
+              "The tethered server is offline, or Docker isn't running on it.",
+              'A database with that name is already using the required port on that node.',
+              'Provisioning succeeded but auto-linking to the vault failed — the connection string prints so you can add it manually with `env:set`.',
+            ],
+          },
+          {
+            cmd: 'db:destroy', usage: 'monolith db:destroy <container-name>',
+            desc: 'Permanently deletes a database container and its data. Requires typing the exact container name to confirm.',
+            why: [
+              "The confirmation text you typed doesn't exactly match the container name — intentional, to prevent fat-fingered deletes.",
+              "Container name doesn't exist on the tethered server (double-check with `monolith list`).",
+              'The tethered server is unreachable.',
+            ],
+          },
+        ],
+      },
+      {
+        title: 'SECRETS',
+        cmds: [
+          {
+            cmd: 'env:set', usage: 'monolith env:set',
+            desc: 'Interactively encrypts and stores one KEY=VALUE pair in the remote vault on your tethered server.',
+            why: [
+              'Not run from inside a project folder — no .monolith/project.json found.',
+              'The tethered server is unreachable.',
+              "The value doesn't take effect until you redeploy — the running container won't pick it up automatically.",
+            ],
+          },
+          {
+            cmd: 'env:rm', usage: 'monolith env:rm',
+            desc: 'Lists current vault keys and lets you pick one to delete.',
+            why: [
+              'Vault is empty — there is nothing to select.',
+              'The tethered server is unreachable while fetching or deleting.',
+            ],
+          },
+        ],
+      },
+      {
+        title: 'DEPLOYMENT',
+        cmds: [
+          {
+            cmd: 'deploy', usage: 'monolith deploy',
+            desc: 'Zips the project directory, uploads it to the tethered server, and runs a health-checked blue/green traffic switch.',
+            why: [
+              'Project is untethered — no target hardware assigned.',
+              'Target node is down or unreachable (ECONNREFUSED/ETIMEDOUT) — the agent may not be running on port 4000.',
+              'Upload hits the 5-minute hard timeout on a very large payload or slow connection.',
+              "Traffic never switches because the new container fails its health check — check `monolith logs` (runtime stream).",
+              "If this project is GitHub-connected, manual deploy needs an explicit 'y' confirmation since it temporarily overrides CI/CD.",
+            ],
+          },
+          {
+            cmd: 'github:connect', usage: 'monolith github:connect',
+            desc: 'Registers a push webhook on your GitHub repo pointing at the tethered node, so every `git push` triggers a deploy.',
+            why: [
+              "Repo wasn't entered in 'username/repo' format.",
+              'GitHub PAT is missing the repo or admin:repo_hook scope, or the repo name is wrong — GitHub returns 404 either way.',
+              "GITHUB_WEBHOOK_SECRET isn't set in the CLI's local .env — worth double-checking this is present before relying on the webhook.",
+              "Webhook registers on GitHub but the Dashboard sync call fails separately — CI/CD still works, the dashboard just won't show the repo link.",
+            ],
+          },
+          {
+            cmd: 'rollback', usage: 'monolith rollback',
+            desc: 'Instantly flips live traffic back to the previous container, no rebuild required.',
+            why: [
+              'No previous deployment exists yet to roll back to (this is your first-ever deploy).',
+              'The tethered server is unreachable.',
+            ],
+          },
+        ],
+      },
+      {
+        title: 'OPERATIONS',
+        cmds: [
+          {
+            cmd: 'list', usage: 'monolith list',
+            desc: 'Quick table of active applications and databases on the tethered server.',
+            why: [
+              'Project is untethered, or .monolith/project.json is missing.',
+              'The tethered server is unreachable.',
+            ],
+          },
+          {
+            cmd: 'status', usage: 'monolith status',
+            desc: 'Full diagnostic: container health, secure vault contents, rollback targets, and database status, in one scan.',
+            why: [
+              'Project is untethered, or .monolith/project.json is missing.',
+              'The tethered server is unreachable — any of the three parallel API calls can fail this.',
+            ],
+          },
+          {
+            cmd: 'logs', usage: 'monolith logs',
+            desc: 'Streams either the Nixpacks build log or the live runtime container log from the tethered server.',
+            why: [
+              'The tethered server is unreachable, so the stream never opens.',
+              "You picked the runtime stream but nothing has deployed successfully yet, so there's no running container to tail.",
+            ],
+          },
+        ],
+      },
+      {
+        title: 'DESTRUCTIVE',
+        cmds: [
+          {
+            cmd: 'app:purge', usage: 'monolith app:purge [container-name]',
+            desc: 'Removes just the application container, leaving the project and any databases untouched.',
+            why: [
+              "Typed anything other than exactly 'yes' at the confirmation prompt — treated as an abort by design.",
+              'No container name given and not run from inside a project directory, so there is nothing to target.',
+              'The tethered server is unreachable.',
+            ],
+          },
+          {
+            cmd: 'destroy', usage: 'monolith destroy [project-id]',
+            desc: 'Permanently deletes a project and every resource attached to it from the tethered server.',
+            why: [
+              "Confirmation text didn't exactly match the project ID.",
+              'No project-id given and not run from inside a project folder.',
+              'The tethered server is unreachable.',
+            ],
+          },
+        ],
+      },
+    ];
+ 
+    // Flatten for numbered lookup
+    const FLAT = [];
+    SECTIONS.forEach((section) => section.cmds.forEach((c) => FLAT.push(c)));
+    FLAT.forEach((c, i) => { c._n = i + 1; });
+ 
+    // ================= MENU RENDERING =================
+    function printMenu() {
+      console.log('\n  ' + bold(yellow('📖 COMMAND REFERENCE')) + '   ' + dim('(type a number to expand)'));
+      const CMD_COL = 34;
+      SECTIONS.forEach((section) => {
+        console.log('\n  ' + dim(section.title));
+        section.cmds.forEach((c) => {
+          const isDestructive = section.title === 'DESTRUCTIVE';
+          const label = `[${c._n}] ${c.cmd}`.padEnd(CMD_COL, ' ');
+          console.log(`  ${isDestructive ? red(label) : cyan(label)}${gray(c.desc.split('.')[0] + '.')}`);
+        });
+      });
+      console.log('\n' + rule());
+      console.log(`  ${gray('Type a')} ${bold('number')} ${gray('to expand a command  ·  ')}${bold('a')}${gray(' = expand all  ·  ')}${bold('m')}${gray(' = redraw menu  ·  ')}${bold('q')}${gray(' = quit guide')}`);
+    }
+ 
+    function printCard(c) {
+      console.log('\n  ' + rule(cyan));
+      console.log(`  ${bold(cyan('▶ ' + c.cmd))}`);
+      console.log(`  ${gray('Usage:')}  ${cyan('$ ' + c.usage)}`);
+      console.log(`  ${gray('What it does:')} ${c.desc}`);
+      console.log(`\n  ${yellow('⚠ COMMON FAILURE REASONS')}`);
+      c.why.forEach((reason) => {
+        console.log(`    ${red('•')} ${gray(reason)}`);
+      });
+      console.log('  ' + rule(cyan));
+    }
+ 
+    printMenu();
+ 
+    // ================= INTERACTIVE EXPANDER LOOP =================
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q) => new Promise((resolve) => rl.question(q, resolve));
+ 
+    let browsing = true;
+    while (browsing) {
+      const raw = (await ask(`\n  ${bold('guide>')} `)).trim().toLowerCase();
+ 
+      if (raw === 'q' || raw === 'quit' || raw === 'exit') {
+        browsing = false;
+        break;
+      }
+      if (raw === 'm' || raw === 'menu') {
+        printMenu();
+        continue;
+      }
+      if (raw === 'a' || raw === 'all') {
+        FLAT.forEach(printCard);
+        continue;
+      }
+      if (/^\d+$/.test(raw)) {
+        const match = FLAT.find((c) => c._n === parseInt(raw, 10));
+        if (match) { printCard(match); continue; }
+        console.log(gray('  No command at that number. Type `m` to see the menu again.'));
+        continue;
+      }
+      // fallback: fuzzy match by command name
+      const byName = FLAT.find((c) => c.cmd.toLowerCase().includes(raw));
+      if (raw && byName) { printCard(byName); continue; }
+ 
+      console.log(gray("  Not recognized. Type a number, a command name, 'a', 'm', or 'q'."));
+    }
+    rl.close();
+ 
     console.log('\n' + rule());
     console.log('\n  ' + bold(`Let's deploy your dream project.`) + '\n');
   });
