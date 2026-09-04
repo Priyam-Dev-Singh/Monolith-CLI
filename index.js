@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 require('dotenv').config({ path: __dirname + '/.env' });
-const DASHBOARD_URL = 'http://localhost:3000';
 const ora = require('ora');
 const axios = require('axios');
 const FormData = require('form-data');
