@@ -329,10 +329,26 @@ async function buildAndDeploy(projectId, extractDest, customDomain = null) {
       oldContainers = stdout.trim();
     } catch (e) {}
 
-    // --- THE OMNI-PORT MATRIX ---
-    writeLog('Forging the new container with Omni-Port Matrix...');
-    // 1. We inject PORT=3000 (PaaS Standard) and blanket-map the 4 industry-standard framework ports
-    await execAsync(`docker run -d --restart unless-stopped -e PORT=3000 -p 0:3000 -p 0:80 -p 0:8000 -p 0:8080 --name ${newContainerName} ${dockerEnvFlag}${imageName}`);
+    // --- THE BLUEPRINT READER (INDUSTRY STANDARD) ---
+    writeLog('📖 Reading image blueprint to determine framework port...');
+    const { stdout: exposedJson } = await execAsync(`docker inspect -f '{{json .Config.ExposedPorts}}' ${imageName}`);
+    
+    let internalPort = '3000'; // PaaS standard fallback
+    try {
+      if (exposedJson && exposedJson.trim() !== 'null') {
+        const portsObj = JSON.parse(exposedJson.trim());
+        const ports = Object.keys(portsObj);
+        if (ports.length > 0) {
+          internalPort = ports[0].split('/')[0]; // Extracts "80" from "80/tcp"
+        }
+      }
+    } catch(e) {}
+    
+    writeLog(`[SYSTEM] Framework natively requires Port: ${internalPort}`);
+
+    writeLog('Forging the new container...');
+    // We explicitly map the ONE port the framework asked for, and inject it as an environment variable just in case.
+    await execAsync(`docker run -d --restart unless-stopped -e PORT=${internalPort} -p 0:${internalPort} --name ${newContainerName} ${dockerEnvFlag}${imageName}`);
     
     writeLog('🩺 Running health check (5s)...');
     await new Promise(resolve => setTimeout(resolve, 5000));
@@ -344,33 +360,23 @@ async function buildAndDeploy(projectId, extractDest, customDomain = null) {
       throw new Error('Deployment failed health check. Traffic was not routed.');
     }
 
-    // 2. Interrogate Docker to extract the active Host Ports
-    const { stdout: portOutput } = await execAsync(`docker port ${newContainerName}`);
-    // Use a Set to remove duplicate IPv4 and IPv6 bindings
-    const hostPorts = [...new Set([...portOutput.toString().matchAll(/:(\d+)/g)].map(m => m[1]))];
+    // Interrogate Docker for the dynamically mapped Host Port
+    const { stdout: portBuffer } = await execAsync(`docker inspect --format='{{(index (index .NetworkSettings.Ports "${internalPort}/tcp") 0).HostPort}}' ${newContainerName}`);
+    const activeHostPort = portBuffer.toString().trim();
     
-    if (hostPorts.length === 0) {
-      await execAsync(`docker rm -f ${newContainerName}`);
-      throw new Error(`CRITICAL: Matrix routing failed. Docker refused to bind ports.`);
-    }
-
-    writeLog(`[SYSTEM] Matrix established on Host Ports: ${hostPorts.join(', ')}`);
-    const caddyUpstreams = hostPorts.map(p => `localhost:${p}`).join(' ');
-
-    // 3. Wire Caddy with Automatic Port Discovery (lb_policy first)
+    writeLog(`[SYSTEM] Container securely mapped to Host Port: ${activeHostPort}`);
+    
+    // --- NEW DOMAIN ROUTING LOGIC ---
     const nipIoDomain = projectId + '.20.2.198.46.nip.io';
     const caddyDir = path.join(__dirname, 'caddy-configs');
     if (!fs.existsSync(caddyDir)) fs.mkdirSync(caddyDir, { recursive: true });
     
-    // Caddy will automatically test the upstreams and lock onto the correct container port
-    const caddyBlock = `{\n  reverse_proxy ${caddyUpstreams} {\n    lb_policy first\n  }\n}\n`;
-    
     let caddyConfig = '';
     if (customDomain) {
       writeLog(`🌍 Wiring dual-routes: nip.io & ${customDomain}`);
-      caddyConfig = `http://${nipIoDomain}, ${customDomain} ${caddyBlock}`;
+      caddyConfig = `http://${nipIoDomain}, ${customDomain} {\n  reverse_proxy localhost:${activeHostPort}\n}\n`;
     } else {
-      caddyConfig = `http://${nipIoDomain} ${caddyBlock}`;
+      caddyConfig = `http://${nipIoDomain} {\n  reverse_proxy localhost:${activeHostPort}\n}\n`;
     }
     
     fs.writeFileSync(path.join(caddyDir, projectId + '.caddy'), caddyConfig);
