@@ -135,7 +135,7 @@ async function getFreePort(min, max) {
 // FIX 7: Make engine asynchronous
 
 // --- THE BLUE/GREEN DEPLOYMENT ENGINE (WITH X-RAY LOGGING) ---
-async function buildAndDeploy(projectId, extractDest, customDomain = null) { // <-- ADDED PARAMETER
+{/*async function buildAndDeploy(projectId, extractDest, customDomain = null) { // <-- ADDED PARAMETER
   // 1. Initialize the Log Stream File
   const logDir = path.join(__dirname, 'logs');
   if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
@@ -261,6 +261,155 @@ async function buildAndDeploy(projectId, extractDest, customDomain = null) { // 
       writeLog('🧹 Running garbage collection (removing orphaned blueprints)...');
       // This deletes any <none> images taking up disk space, 
       // but safely keeps the images currently being used by active or rolled-back containers.
+      await execAsync('docker image prune -f');
+    } catch (cleanupError) {
+      console.error('Garbage collection warning:', cleanupError.message);
+    }
+    // -----------------------------------------
+
+    // Update final success log to reflect the routing
+    if (customDomain) {
+       writeLog(`✅ Deployment live: http://${nipIoDomain} | https://${customDomain}`);
+    } else {
+       writeLog(`✅ Deployment live: http://${nipIoDomain}`);
+    }
+    
+    return nipIoDomain;
+  } catch (error) {
+    writeLog(`❌ Build Error: ${error.message}`);
+    throw error;
+  }
+}*/}
+
+async function buildAndDeploy(projectId, extractDest, customDomain = null) {
+  // 1. Initialize the Log Stream File
+  const logDir = path.join(__dirname, 'logs');
+  if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+  const logFile = path.join(logDir, `${projectId}.log`);
+  
+  const writeLog = (msg) => {
+    console.log(msg);
+    fs.appendFileSync(logFile, `[SYSTEM] ${msg}\n`);
+  };
+
+  writeLog(`🚀 Starting Zero-Downtime Deployment for ${projectId}...`);
+  const version = Date.now();
+  const imageName = `img_${projectId}`;
+  const newContainerName = `live_${projectId}_${version}`;
+  let buildPath = extractDest;
+  const monolithConfigPath = path.join(extractDest, 'monolith.json');
+
+  if (fs.existsSync(monolithConfigPath)) {
+    try {
+      const config = JSON.parse(fs.readFileSync(monolithConfigPath, 'utf8'));
+      if (config.buildDirectory) buildPath = path.join(extractDest, config.buildDirectory);
+    } catch (err) {}
+  }
+
+  const envFilePath = path.join(__dirname, 'envs', projectId + '.env');
+  let dockerEnvFlag = '';
+  let nixpacksEnvFlag = '';
+  
+  if (fs.existsSync(envFilePath)) {
+    writeLog('🔒 Injecting secure environment vault...');
+    dockerEnvFlag = `--env-file ${envFilePath} `;
+    const envLines = fs.readFileSync(envFilePath, 'utf8').split('\n').filter(line => line.trim() !== '');
+    nixpacksEnvFlag = envLines.map(line => `--env ${line.trim()}`).join(' ') + ' ';
+  }
+
+  try {
+    writeLog('⚙️ Engaging Nixpacks Build Engine...');
+    
+    // 2. THE PIPELINE SPLIT
+    await execAsync(`nixpacks build ${buildPath} --name ${imageName} ${nixpacksEnvFlag} >> ${logFile} 2>&1`);
+    
+    let oldContainers = '';
+    try {
+      const { stdout } = await execAsync(`docker ps -q -f "name=^live_${projectId}_"`);
+      oldContainers = stdout.trim();
+    } catch (e) {}
+
+    // --- THE OMNI-PORT MATRIX ---
+    writeLog('Forging the new container with Omni-Port Matrix...');
+    // 1. We inject PORT=3000 (PaaS Standard) and blanket-map the 4 industry-standard framework ports
+    await execAsync(`docker run -d --restart unless-stopped -e PORT=3000 -p 0:3000 -p 0:80 -p 0:8000 -p 0:8080 --name ${newContainerName} ${dockerEnvFlag}${imageName}`);
+    
+    writeLog('🩺 Running health check (5s)...');
+    await new Promise(resolve => setTimeout(resolve, 5000));
+    const { stdout: status } = await execAsync(`docker inspect -f '{{.State.Running}}' ${newContainerName}`);
+    
+    if (status.trim() !== 'true') {
+      writeLog('❌ Health check failed. Container crashed on startup.');
+      await execAsync(`docker rm -f ${newContainerName}`);
+      throw new Error('Deployment failed health check. Traffic was not routed.');
+    }
+
+    // 2. Interrogate Docker to extract the active Host Ports
+    const { stdout: portOutput } = await execAsync(`docker port ${newContainerName}`);
+    // Use a Set to remove duplicate IPv4 and IPv6 bindings
+    const hostPorts = [...new Set([...portOutput.toString().matchAll(/:(\d+)/g)].map(m => m[1]))];
+    
+    if (hostPorts.length === 0) {
+      await execAsync(`docker rm -f ${newContainerName}`);
+      throw new Error(`CRITICAL: Matrix routing failed. Docker refused to bind ports.`);
+    }
+
+    writeLog(`[SYSTEM] Matrix established on Host Ports: ${hostPorts.join(', ')}`);
+    const caddyUpstreams = hostPorts.map(p => `localhost:${p}`).join(' ');
+
+    // 3. Wire Caddy with Automatic Port Discovery (lb_policy first)
+    const nipIoDomain = projectId + '.20.2.198.46.nip.io';
+    const caddyDir = path.join(__dirname, 'caddy-configs');
+    if (!fs.existsSync(caddyDir)) fs.mkdirSync(caddyDir, { recursive: true });
+    
+    // Caddy will automatically test the upstreams and lock onto the correct container port
+    const caddyBlock = `{\n  reverse_proxy ${caddyUpstreams} {\n    lb_policy first\n  }\n}\n`;
+    
+    let caddyConfig = '';
+    if (customDomain) {
+      writeLog(`🌍 Wiring dual-routes: nip.io & ${customDomain}`);
+      caddyConfig = `http://${nipIoDomain}, ${customDomain} ${caddyBlock}`;
+    } else {
+      caddyConfig = `http://${nipIoDomain} ${caddyBlock}`;
+    }
+    
+    fs.writeFileSync(path.join(caddyDir, projectId + '.caddy'), caddyConfig);
+    await execAsync('caddy reload --config ./Caddyfile', { cwd: __dirname });
+    // --------------------------------
+
+    // --- THE RETENTION ENGINE (5-VERSION HISTORY) ---
+    try {
+      writeLog('🧹 Analyzing historical deployments for cleanup...');
+      const { stdout: containerList } = await execAsync(`docker ps -a --format "{{.Names}}" -f "name=^live_${projectId}_"`);
+      const containers = containerList.trim().split('\n').filter(Boolean);
+      
+      // Sort by timestamp (Highest/Newest first)
+      containers.sort((a, b) => {
+        const tsA = parseInt(a.split('_').pop(), 10);
+        const tsB = parseInt(b.split('_').pop(), 10);
+        return tsB - tsA;
+      });
+
+      // Indices 1 through 5: The previous 5 containers
+      if (containers.length > 1) {
+        const toSleep = containers.slice(1, 6).join(' ');
+        writeLog(`💤 Sleeping historical versions for rollback safety: ${toSleep}`);
+        await execAsync(`docker stop ${toSleep}`);
+      }
+
+      // Indices 6+: The genuinely obsolete containers (destroy them)
+      if (containers.length > 6) {
+        const toDelete = containers.slice(6).join(' ');
+        writeLog(`🔥 Purging obsolete containers to free memory: ${toDelete}`);
+        await execAsync(`docker rm -f ${toDelete}`);
+      }
+    } catch (cleanupError) {
+      writeLog(`⚠️ Retention cleanup skipped: ${cleanupError.message}`);
+    }
+
+    // --- AUTOMATED GARBAGE COLLECTION ---
+    try {
+      writeLog('🧹 Running garbage collection (removing orphaned blueprints)...');
       await execAsync('docker image prune -f');
     } catch (cleanupError) {
       console.error('Garbage collection warning:', cleanupError.message);
