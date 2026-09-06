@@ -222,62 +222,82 @@ program
 
 program
   .command('db:migrate')
-  .description('Securely migrate data from an external database to Monolith using Ephemeral Workers')
+  .description('Migrate data from an external provider to an attached Monolith database')
   .action(async () => {
     const configPath = path.join(process.cwd(), '.monolith', 'project.json');
     if (!fs.existsSync(configPath)) return console.error("❌ Run 'monolith init' first to establish target context.");
-    
+
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     const activeProjectId = config.id || config.projectId;
 
     console.log('\n🛸 --- MONOLITH EPHEMERAL MIGRATION ENGINE --- 🛸\n');
-
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    const askQuestion = (query) => new Promise((resolve) => rl.question(query, resolve));
-
-    console.log(`⬛ TARGET ENGINE SELECTION`);
-    console.log(`1. PostgreSQL`);
-    console.log(`2. MongoDB`);
-    
-    let choice = await askQuestion('\nSelect database engine (1-2, press Enter for 1): ');
-    rl.close(); // Closed here because askHidden creates its own readline instance
-
-    const engines = { '1': 'postgres', '2': 'mongodb' };
-    const dbType = engines[choice.trim()] || 'postgres';
-
-    console.log('\n[SECURITY WARNING] Connection URLs are masked and bypassed from bash history.');
-    const sourceUrl = await askHidden('Source Connection String (e.g., Supabase / Atlas URL): ');
-    console.log(''); // Ensure terminal formatting stays clean after masked input
-    const targetUrl = await askHidden('Target Monolith Connection String (from db:create): ');
-    console.log(''); 
-
-    if (!sourceUrl || !targetUrl) {
-        return console.log('❌ Migration aborted: Both source and target connection strings are required.');
-    }
-
-    const spinner = ora('Acquiring hardware coordinates & establishing secure tunnel...').start();
+    const spinner = ora('Detecting attached databases on execution node...').start();
 
     try {
-      // 1. DYNAMIC TARGET ACQUISITION
       const target = await resolveTarget(activeProjectId);
-      spinner.text = `Transmitting payload to ${target.url}...`;
 
-      // 2. TRIGGER THE EPHEMERAL WORKER
-      const res = await axios.post(`${target.url}/api/db/migrate`, {
-        projectId: activeProjectId,
-        dbType,
-        sourceUrl: sourceUrl.trim(),
-        targetUrl: targetUrl.trim()
-      }, {
-        headers: { 'x-api-key': target.apiKey } // Secure payload injection
+      // Fetch attached databases directly from the node
+      const listRes = await axios.get(`${target.url}/api/list?projectId=${activeProjectId}`, {
+        headers: { 'x-api-key': target.apiKey }
       });
 
-      spinner.succeed(`✅ ${res.data.message}`);
-      console.log(`\nTo monitor the live data stream, SSH into your server or check the logs directory.`);
+      const dbs = listRes.data.dbs || [];
+      if (dbs.length === 0) {
+        spinner.fail('No databases detected for this project.');
+        console.log("Run 'monolith db:create <dbName>' before initiating migration.\n");
+        return;
+      }
+
+      spinner.succeed(`Found ${dbs.length} attached database(s).`);
+
+      console.log('\n⬛ SELECT TARGET DATABASE');
+      dbs.forEach((db, idx) => {
+        console.log(`[${idx + 1}] ${db.name} (${db.type || 'postgres'}) - Status: ${db.status}`);
+      });
+
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const ask = (query) => new Promise((resolve) => rl.question(query, resolve));
+
+      const selection = await ask('\nSelect destination database number: ');
+      const dbIndex = parseInt(selection.trim(), 10) - 1;
+
+      if (isNaN(dbIndex) || !dbs[dbIndex]) {
+        rl.close();
+        return console.log('❌ Invalid selection. Migration aborted.');
+      }
+
+      const chosenDb = dbs[dbIndex];
+      const dbType = (chosenDb.type || 'postgres').toLowerCase();
+      rl.close();
+
+      console.log(`\nSelected target: ${chosenDb.name} [${dbType.toUpperCase()}]`);
+      console.log('[SECURITY] Input is masked. Bypassed from shell history.');
       
+      const sourceUrl = await askHidden('Source Database Connection URI: ');
+      console.log('');
+
+      if (!sourceUrl.trim()) {
+        return console.log('❌ Migration aborted: Source URI is required.');
+      }
+
+      const migrateSpinner = ora('Transmitting migration payload to Ephemeral Worker...').start();
+
+      const res = await axios.post(`${target.url}/api/db/migrate`, {
+        projectId: activeProjectId,
+        dbType: dbType,
+        targetDbName: chosenDb.name,
+        targetContainer: chosenDb.containerName,
+        sourceUrl: sourceUrl.trim()
+      }, {
+        headers: { 'x-api-key': target.apiKey }
+      });
+
+      migrateSpinner.succeed(`✅ ${res.data.message}`);
+      console.log(`Logs streaming to execution node. Run 'monolith logs' to monitor.\n`);
+
     } catch (err) {
-      spinner.fail('❌ Migration initiation failed.');
-      console.error(err.response?.data?.error || err.message);
+      spinner.stop();
+      console.error('\n❌ Migration initiation failed:', err.response?.data?.error || err.message);
     }
   });
 
