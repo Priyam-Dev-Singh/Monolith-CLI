@@ -394,6 +394,7 @@ program
       // Output the exact physical name and variables we saved earlier
       console.log(`\n⬛ TARGET COORDINATES:`);
       console.log(`🗄️  Container Name:  ${actualContainerName}`); 
+      console.log(`🗄️  Container URL:  ${dbUrl}   (save this in your .env for future purposes)`); 
       console.log(`🔗 Secure Vault:    ${envKey} auto-injected`);
       console.log(`\n(Keep this container name handy if you ever need to run 'monolith db:destroy')\n`);
 
