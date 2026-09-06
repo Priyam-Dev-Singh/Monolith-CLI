@@ -52,7 +52,7 @@ Monolith doesn't try to be a bigger, better Vercel. It's the thing you point at 
 
 ```bash
 # 1. Install the CLI
-npm install -g monolith-engine
+npm i monolith-engine
 
 # 2. Get a Personal Access Token from your Monolith dashboard, then log in
 monolith login --token <YOUR_PAT> --url <YOUR_DASHBOARD_URL>
@@ -74,7 +74,7 @@ Run `monolith guide` at any point for a full interactive walkthrough with a comm
 ## 📦 Installation
 
 ```bash
-npm install -g monolith-engine
+npm i monolith-engine
 ```
 
 Requires Node 18+ and a server you can SSH into (any provider — Hetzner, DigitalOcean, a home server, whatever you've got).
