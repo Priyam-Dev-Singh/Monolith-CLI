@@ -303,7 +303,7 @@ program
       
       const streamRes = await axios({
         method: 'get',
-        url: `${target.url}/api/db/logs?projectId=${activeProjectId}`,
+        url: `${target.url}/api/logs/stream?projectId=${activeProjectId}&type=migration`,
         headers: { 'x-api-key': target.apiKey },
         responseType: 'stream'
       });
