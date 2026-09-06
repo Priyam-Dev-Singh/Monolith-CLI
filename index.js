@@ -298,8 +298,18 @@ program
       });
 
       migrateSpinner.succeed(`✅ ${res.data.message}`);
-      console.log(`Logs streaming to execution node. Run 'monolith logs' to monitor.\n`);
-      process.exit(0);
+      // --- NEW: AUTO-ATTACH TELEMETRY STREAM ---
+      console.log(`\n📡 Tapping into live ephemeral worker telemetry... (Press Ctrl+C to disconnect)\n`);
+      
+      const streamRes = await axios({
+        method: 'get',
+        url: `${target.url}/api/db/logs?projectId=${activeProjectId}`,
+        headers: { 'x-api-key': target.apiKey },
+        responseType: 'stream'
+      });
+
+      streamRes.data.on('data', chunk => process.stdout.write(chunk));
+      // ----------------------------------------
 
     } catch (err) {
       if (detectSpinner.isSpinning) detectSpinner.stop();
