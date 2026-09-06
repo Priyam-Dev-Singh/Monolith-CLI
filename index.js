@@ -225,30 +225,32 @@ program
   .description('Migrate data from an external provider to an attached Monolith database')
   .action(async () => {
     const configPath = path.join(process.cwd(), '.monolith', 'project.json');
-    if (!fs.existsSync(configPath)) return console.error("❌ Run 'monolith init' first to establish target context.");
+    if (!fs.existsSync(configPath)) {
+      console.error("❌ Run 'monolith init' first to establish target context.");
+      process.exit(1);
+    }
 
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     const activeProjectId = config.id || config.projectId;
 
     console.log('\n🛸 --- MONOLITH EPHEMERAL MIGRATION ENGINE --- 🛸\n');
-    const spinner = ora('Detecting attached databases on execution node...').start();
+    const detectSpinner = ora('Detecting attached databases on execution node...').start();
 
+    let target;
     try {
-      const target = await resolveTarget(activeProjectId);
-
-      // Fetch attached databases directly from the node
+      target = await resolveTarget(activeProjectId);
       const listRes = await axios.get(`${target.url}/api/list?projectId=${activeProjectId}`, {
         headers: { 'x-api-key': target.apiKey }
       });
 
       const dbs = listRes.data.dbs || [];
       if (dbs.length === 0) {
-        spinner.fail('No databases detected for this project.');
+        detectSpinner.fail('No databases detected for this project.');
         console.log("Run 'monolith db:create <dbName>' before initiating migration.\n");
-        return;
+        process.exit(1);
       }
 
-      spinner.succeed(`Found ${dbs.length} attached database(s).`);
+      detectSpinner.succeed(`Found ${dbs.length} attached database(s).`);
 
       console.log('\n⬛ SELECT TARGET DATABASE');
       dbs.forEach((db, idx) => {
@@ -263,7 +265,8 @@ program
 
       if (isNaN(dbIndex) || !dbs[dbIndex]) {
         rl.close();
-        return console.log('❌ Invalid selection. Migration aborted.');
+        console.log('❌ Invalid selection. Migration aborted.');
+        process.exit(1);
       }
 
       const chosenDb = dbs[dbIndex];
@@ -271,13 +274,16 @@ program
       rl.close();
 
       console.log(`\nSelected target: ${chosenDb.name} [${dbType.toUpperCase()}]`);
-      console.log('[SECURITY] Input is masked. Bypassed from shell history.');
+      console.log('[SECURITY] Inputs are masked. Bypassed from shell history.');
       
-      const sourceUrl = await askHidden('Source Database Connection URI: ');
+      const sourceUrl = await askHidden('Source Database Connection URI (Supabase/Atlas): ');
+      console.log('');
+      const targetUrl = await askHidden('Target Monolith Connection URI (from db:create): ');
       console.log('');
 
-      if (!sourceUrl.trim()) {
-        return console.log('❌ Migration aborted: Source URI is required.');
+      if (!sourceUrl.trim() || !targetUrl.trim()) {
+        console.log('❌ Migration aborted: Both Source and Target URIs are required.');
+        process.exit(1);
       }
 
       const migrateSpinner = ora('Transmitting migration payload to Ephemeral Worker...').start();
@@ -285,19 +291,21 @@ program
       const res = await axios.post(`${target.url}/api/db/migrate`, {
         projectId: activeProjectId,
         dbType: dbType,
-        targetDbName: chosenDb.name,
-        targetContainer: chosenDb.containerName,
-        sourceUrl: sourceUrl.trim()
+        sourceUrl: sourceUrl.trim(),
+        targetUrl: targetUrl.trim()
       }, {
         headers: { 'x-api-key': target.apiKey }
       });
 
       migrateSpinner.succeed(`✅ ${res.data.message}`);
       console.log(`Logs streaming to execution node. Run 'monolith logs' to monitor.\n`);
+      process.exit(0);
 
     } catch (err) {
-      spinner.stop();
-      console.error('\n❌ Migration initiation failed:', err.response?.data?.error || err.message);
+      if (detectSpinner.isSpinning) detectSpinner.stop();
+      // Use .fail() to permanently halt the spinner and display the error
+      ora().fail(`❌ Migration initiation failed: ${err.response?.data?.error || err.message}`);
+      process.exit(1);
     }
   });
 
