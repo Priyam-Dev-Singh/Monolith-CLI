@@ -18,16 +18,18 @@ axios.defaults.headers.common['x-api-key'] = process.env.PLATFORM_API_KEY;
 
 function isValidIdentifier(s) { return typeof s === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(s); }
 
-// Masked terminal input for passwords/PATs
+// Stealth terminal input for passwords/PATs (Handles clipboard pastes perfectly)
 const askHidden = (query) => new Promise((resolve) => {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  process.stdout.write(query); 
   rl.stdoutMuted = true;
-  rl.query = query;
-  rl.question(rl.query, (val) => { rl.close(); resolve(val); });
   rl._writeToOutput = function (s) {
-    if (rl.stdoutMuted) rl.output.write("\x1B[2K\x1B[200D" + rl.query + "*".repeat(rl.line.length));
-    else rl.output.write(s);
+    // Only output carriage returns so the user can hit Enter
+    if (!rl.stdoutMuted || s.includes('\n') || s.includes('\r')) {
+      rl.output.write(s);
+    }
   };
+  rl.question('', (val) => { rl.close(); resolve(val); });
 });
 
 // --- GLOBAL AUTH RESOLVER ---
