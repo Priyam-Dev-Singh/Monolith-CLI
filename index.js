@@ -21,15 +21,30 @@ function isValidIdentifier(s) { return typeof s === 'string' && /^[a-zA-Z0-9_-]{
 // Stealth terminal input for passwords/PATs (Handles clipboard pastes perfectly)
 const askHidden = (query) => new Promise((resolve) => {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  process.stdout.write(query); 
-  rl.stdoutMuted = true;
+  
+  let promptWritten = false;
+  
   rl._writeToOutput = function (s) {
-    // Only output carriage returns so the user can hit Enter
-    if (!rl.stdoutMuted || s.includes('\n') || s.includes('\r')) {
+    // 1. Allow the initial prompt to render normally
+    if (!promptWritten) {
       rl.output.write(s);
+      promptWritten = true;
+      return;
     }
+    
+    // 2. Allow the Enter key to move to the next line
+    if (s.includes('\n') || s.includes('\r')) {
+      rl.output.write('\n');
+      return;
+    }
+    
+    // 3. Swallow all other keystrokes and pastes (Complete Silence)
   };
-  rl.question('', (val) => { rl.close(); resolve(val); });
+  
+  rl.question(query, (val) => {
+    rl.close();
+    resolve(val);
+  });
 });
 
 // --- GLOBAL AUTH RESOLVER ---
