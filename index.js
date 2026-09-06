@@ -299,6 +299,24 @@ program
         headers: { 'x-api-key': target.apiKey }
       });
 
+      if (!sourceUrl.trim() || !targetUrl.trim()) {
+        console.log('❌ Migration aborted: Both Source and Target URIs are required.');
+        process.exit(1);
+      }
+
+      // --- SUPABASE PRE-FLIGHT INTERCEPTOR ---
+      if (sourceUrl.includes('supabase.co') && !sourceUrl.includes('pooler.supabase.com')) {
+        console.log('\n⚠️  [SUPABASE CONFIGURATION DETECTED]');
+        console.log('You pasted a direct Supabase IPv6 URL. Cloud providers require IPv4 for migrations.');
+        console.log('\n[TECHNICAL DIRECTIVE]:');
+        console.log('1. Go to your Supabase Dashboard -> Database -> Connection Pooler.');
+        console.log('2. Copy the IPv4 Pooler URL (e.g., aws-1...pooler.supabase.com).');
+        console.log('3. Change the port in that URL from 6543 to 5432.');
+        console.log('\nFor a detailed architectural breakdown, run: monolith guide\n');
+        process.exit(1);
+      }
+      // ---------------------------------------
+
       migrateSpinner.succeed(`✅ ${res.data.message}`);
       // --- NEW: AUTO-ATTACH TELEMETRY STREAM ---
       console.log(`\n📡 Tapping into live ephemeral worker telemetry... (Press Ctrl+C to disconnect)\n`);
