@@ -18,33 +18,52 @@ axios.defaults.headers.common['x-api-key'] = process.env.PLATFORM_API_KEY;
 
 function isValidIdentifier(s) { return typeof s === 'string' && /^[a-zA-Z0-9_-]{1,64}$/.test(s); }
 
-// Stealth terminal input for passwords/PATs (Handles clipboard pastes perfectly)
+// Robust masked/stealth input (handles rapid clipboard pastes on Windows & POSIX)
 const askHidden = (query) => new Promise((resolve) => {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  
-  let promptWritten = false;
-  
-  rl._writeToOutput = function (s) {
-    // 1. Allow the initial prompt to render normally
-    if (!promptWritten) {
-      rl.output.write(s);
-      promptWritten = true;
-      return;
+  process.stdout.write(query);
+
+  const isRaw = process.stdin.isRaw;
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+  process.stdin.setEncoding('utf8');
+
+  let input = '';
+
+  const onData = (chunk) => {
+    for (let i = 0; i < chunk.length; i++) {
+      const char = chunk[i];
+
+      // Handle Ctrl+C (graceful exit)
+      if (char === '\u0003') {
+        process.stdin.setRawMode(isRaw);
+        process.stdin.pause();
+        process.stdin.removeListener('data', onData);
+        process.exit(130);
+      }
+
+      // Handle Enter key (\r or \n)
+      if (char === '\r' || char === '\n') {
+        process.stdin.setRawMode(isRaw);
+        process.stdin.pause();
+        process.stdin.removeListener('data', onData);
+        process.stdout.write('\n');
+        return resolve(input);
+      }
+
+      // Handle Backspace (\u0008 or \u007f)
+      if (char === '\u0008' || char === '\u007f') {
+        if (input.length > 0) {
+          input = input.slice(0, -1);
+          process.stdout.write('\b \b'); // Erase asterisk from screen
+        }
+      } else {
+        input += char;
+        process.stdout.write('*'); // Mask each character
+      }
     }
-    
-    // 2. Allow the Enter key to move to the next line
-    if (s.includes('\n') || s.includes('\r')) {
-      rl.output.write('\n');
-      return;
-    }
-    
-    // 3. Swallow all other keystrokes and pastes (Complete Silence)
   };
-  
-  rl.question(query, (val) => {
-    rl.close();
-    resolve(val);
-  });
+
+  process.stdin.on('data', onData);
 });
 
 // --- GLOBAL AUTH RESOLVER ---
