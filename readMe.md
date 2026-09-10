@@ -151,6 +151,15 @@ monolith db:create <db_Name>
 
 Choose Postgres, MySQL, Redis, or MongoDB. The connection string is auto-injected into your project's secrets vault.
 </details>
+<details>
+<summary><code>monolith db:migrate &lt;name&gt;</code> — migrate an existing database</summary>
+
+```bash
+monolith db:migrate
+```
+
+Input the DB connection URL string IPV4 as the source and the databse URL provisioned on our server as the terminal to migrate your onw data in your server provisioned DB. ANy issues failing in this command will be related to the URL of the database.
+</details>
 
 <details>
 <summary><code>monolith env:set</code> / <code>env:rm</code> — manage secrets</summary>
