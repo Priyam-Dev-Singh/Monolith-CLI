@@ -155,26 +155,78 @@ program
 program
   .command('login')
   .description('Authenticate your CLI with the Monolith Control Plane')
-  .requiredOption('-t, --token <string>', 'Your Personal Access Token')
+  .option('-t, --token <string>', 'Bypass browser and authenticate manually with a token')
   .option('-u, --url <string>', 'Your Dashboard URL', 'http://localhost:3000')
-  .action((options) => {
+  .action(async (options) => {
     const globalDir = path.join(os.homedir(), '.monolith');
     if (!fs.existsSync(globalDir)) fs.mkdirSync(globalDir, { recursive: true });
 
-    const authConfig = {
-      token: options.token,
-      dashboardUrl: options.url
-    };
+    // SCENARIO A: Headless / Manual Token Entry
+    if (options.token) {
+      const authConfig = { token: options.token, dashboardUrl: options.url };
+      fs.writeFileSync(path.join(globalDir, 'auth.json'), JSON.stringify(authConfig, null, 2), { mode: 0o600 });
+      
+      const masked = options.token.length > 8 
+        ? `${options.token.slice(0, 4)}...${options.token.slice(-4)}` 
+        : '****';
 
-    fs.writeFileSync(
-      path.join(globalDir, 'auth.json'),
-      JSON.stringify(authConfig, null, 2),
-      { mode: 0o600 } // Secure file permissions
-    );
+      console.log(`\n✅ Operator authenticated via manual token.`);
+      console.log(`🔑 Token: ${masked}`);
+      console.log(`📡 Connected to Control Plane at: ${options.url}`);
+      console.log(`🔐 Credentials secured in ${globalDir}/auth.json\n`);
+      return;
+    }
 
-    console.log(`\n✅ Operator authenticated successfully.`);
-    console.log(`📡 Connected to Control Plane at: ${options.url}`);
-    console.log(`🔐 Credentials secured in ${globalDir}/auth.json\n`);
+    // SCENARIO B: The Loopback OAuth Flow (Browser)
+    const server = http.createServer(async (req, res) => {
+      const reqUrl = new URL(req.url, `http://localhost`);
+      
+      if (reqUrl.pathname === '/callback') {
+        const token = reqUrl.searchParams.get('token');
+        const user = reqUrl.searchParams.get('user') || 'Operator';
+        
+        if (token) {
+          const authConfig = { token, dashboardUrl: options.url };
+          fs.writeFileSync(path.join(globalDir, 'auth.json'), JSON.stringify(authConfig, null, 2), { mode: 0o600 });
+          
+          const masked = token.length > 8 ? `${token.slice(0, 4)}...${token.slice(-4)}` : '****';
+
+          // Success screen for the browser
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end(`
+            <div style="background:#09090b; color:#10b981; font-family:monospace; padding:40px; height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center;">
+              <h1 style="text-transform:uppercase; letter-spacing:2px;">Authentication Successful</h1>
+              <p style="color:#a1a1aa;">You can close this window and return to your terminal.</p>
+            </div>
+          `);
+
+          // Terminal Output
+          console.log(`\n✅ Authenticated successfully as: \x1b[32m${user}\x1b[0m`);
+          console.log(`🔑 Token: ${masked}`);
+          console.log(`📡 Connected to Control Plane at: ${options.url}`);
+          console.log(`🔐 Credentials secured in ${globalDir}/auth.json\n`);
+        } else {
+          res.writeHead(400, { 'Content-Type': 'text/html' });
+          res.end('<h1 style="color:red; font-family:sans-serif;">Authentication Failed. No token received.</h1>');
+          console.log(`\n❌ Authentication failed. Token missing in callback.\n`);
+        }
+
+        server.close();
+        process.exit(0);
+      }
+    });
+
+    // Spin up on a random free port (port 0)
+    server.listen(0, async () => {
+      const port = server.address().port;
+      const authUrl = `${options.url}/cli/auth?port=${port}`;
+
+      console.log(`\n🚀 Initializing loopback authentication...`);
+      console.log(`Opening browser to: ${authUrl}`);
+      console.log(`Waiting for authorization callback...\n`);
+
+      await open(authUrl);
+    });
   });
 
 program
