@@ -1,15 +1,24 @@
 #!/usr/bin/env node
-require('dotenv').config({ path: __dirname + '/.env' });
-const ora = require('ora');
-const axios = require('axios');
-const FormData = require('form-data');
-const fs = require('fs');
-const {ZipArchive} = require('archiver');   // ✅ require works
-const path = require('path');
-const { program } = require('commander');
-const readline = require('readline');
-const crypto = require('crypto');
-const os = require('os');
+import dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+// Recreate __dirname for ES Modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+dotenv.config({ path: __dirname + '/.env' });
+import ora from 'ora';
+import axios from 'axios';
+import FormData from 'form-data';
+import fs from 'fs';
+import { ZipArchive } from 'archiver';
+import path from 'path';
+import { program } from 'commander';
+import readline from 'readline';
+import crypto from 'crypto';
+import os from 'os';
+
 import http from 'http';
 import { URL } from 'url';
 import open from 'open';
