@@ -10,6 +10,9 @@ const { program } = require('commander');
 const readline = require('readline');
 const crypto = require('crypto');
 const os = require('os');
+import http from 'http';
+import { URL } from 'url';
+import open from 'open';
 
 axios.defaults.timeout = 300000; // 5-minute timeout for heavy deployments
 
@@ -102,6 +105,47 @@ const resolveTarget = async (projectId) => {
     throw new Error(error.response?.data?.error || "Failed to locate hardware coordinates.");
   }
 };
+
+export async function handleLogin() {
+  // 1. Spin up a temporary local server on a random free port (port 0)
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    
+    if (url.pathname === '/callback') {
+      const token = url.searchParams.get('token');
+      
+      if (token) {
+        // 2. Save token to local config (~/.monolith/config.json)
+        const configDir = path.join(os.homedir(), '.monolith');
+        if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
+        
+        fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({ token }, null, 2));
+
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<h1>Authentication Successful!</h1><p>You can close this window and return to your terminal.</p>');
+        console.log('\n✨ [SUCCESS]: Monolith CLI authenticated successfully.');
+      } else {
+        res.writeHead(400, { 'Content-Type': 'text/html' });
+        res.end('<h1>Authentication Failed</h1><p>No token received.</p>');
+      }
+
+      // Close the server and exit process after response
+      server.close();
+      process.exit(0);
+    }
+  });
+
+  server.listen(0, async () => {
+    const port = (server.address()).port;
+    const authUrl = `https://yourdomain.com/cli/auth?port=${port}`;
+
+    console.log(`\n🚀 Opening browser to authenticate with Monolith...`);
+    console.log(`If your browser does not open automatically, visit: ${authUrl}\n`);
+
+    // Automatically open the user's default browser
+    await open(authUrl);
+  });
+}
 
 program
   .name('monolith')
