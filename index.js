@@ -81,10 +81,31 @@ const askHidden = (query) => new Promise((resolve) => {
 // --- GLOBAL AUTH RESOLVER ---
 const getGlobalAuth = () => {
   const globalAuthPath = path.join(os.homedir(), '.monolith', 'auth.json');
+  
+  // Default fallback (Environment variables)
+  let authData = { token: process.env.MONOLITH_TOKEN, dashboardUrl: process.env.DASHBOARD_URL };
+  
   if (fs.existsSync(globalAuthPath)) {
-    return JSON.parse(fs.readFileSync(globalAuthPath, 'utf8'));
+    try {
+      const rawData = JSON.parse(fs.readFileSync(globalAuthPath, 'utf8'));
+      
+      // SCENARIO A: New Profile-based architecture
+      if (rawData.activeProfile && rawData.profiles) {
+        const active = rawData.profiles[rawData.activeProfile];
+        if (active) {
+          authData = { token: active.token, dashboardUrl: active.dashboardUrl };
+        }
+      } 
+      // SCENARIO B: Legacy flat architecture (keeps old commands running!)
+      else if (rawData.token) {
+        authData = { token: rawData.token, dashboardUrl: rawData.dashboardUrl };
+      }
+    } catch (err) {
+      // If the file is corrupted, fallback to env vars safely
+    }
   }
-  return { token: process.env.MONOLITH_TOKEN, dashboardUrl: process.env.DASHBOARD_URL };
+  
+  return authData;
 };
 
 // --- DYNAMIC TARGET RESOLVER ---
