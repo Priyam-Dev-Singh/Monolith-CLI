@@ -407,7 +407,7 @@ program
       console.log(); // Spacing
       const { selectedProfile } = await inquirer.prompt([
         {
-          type: 'list',
+          type: 'select',
           name: 'selectedProfile',
           message: 'Select your active Control Plane profile:',
           choices: choices
