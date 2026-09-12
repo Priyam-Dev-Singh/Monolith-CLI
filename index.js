@@ -2,6 +2,7 @@
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import inquirer from 'inquirer';
 
 // Recreate __dirname for ES Modules
 const __filename = fileURLToPath(import.meta.url);
@@ -368,23 +369,39 @@ program
   });
 
 program
-  .command('switch <profile>')
-  .description('Switch your active local profile')
-  .action((profile) => {
+  .command('switch')
+  .description('Interactive visual profile switcher')
+  .action(async () => {
     const authPath = path.join(os.homedir(), '.monolith', 'auth.json');
     if (!fs.existsSync(authPath)) return console.log('\n❌ [ERROR] No configuration found. Run `monolith login`.\n');
 
     try {
       const authData = JSON.parse(fs.readFileSync(authPath, 'utf8'));
       
-      if (!authData.profiles || !authData.profiles[profile]) {
-        return console.log(`\n❌ [ERROR] Profile '\x1b[31m${profile}\x1b[0m' not found on this machine.\n`);
+      if (!authData.profiles || Object.keys(authData.profiles).length === 0) {
+        return console.log('\n❌ [ERROR] No profiles found. Run `monolith login`.\n');
       }
 
-      authData.activeProfile = profile;
+      // Build the interactive list
+      const choices = Object.keys(authData.profiles).map(name => ({
+        name: name === authData.activeProfile ? `👉 ${name} (Active)` : `   ${name}`,
+        value: name
+      }));
+
+      console.log(); // Spacing
+      const { selectedProfile } = await inquirer.prompt([
+        {
+          type: 'list',
+          name: 'selectedProfile',
+          message: 'Select your active Control Plane profile:',
+          choices: choices
+        }
+      ]);
+
+      authData.activeProfile = selectedProfile;
       fs.writeFileSync(authPath, JSON.stringify(authData, null, 2), { mode: 0o600 });
       
-      console.log(`\n✅ Active profile switched to: \x1b[32m${profile}\x1b[0m\n`);
+      console.log(`\n✅ Active profile switched to: \x1b[32m${selectedProfile}\x1b[0m\n`);
     } catch (error) {
       console.log(`\n❌ [ERROR] Failed to switch profile.\n`);
     }
