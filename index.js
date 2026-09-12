@@ -315,7 +315,7 @@ program
   });
 
 program
-  .command('token:generate <name>')
+  .command('generate:token <name>')
   .description('Forge a new Personal Access Token and save it as a local profile')
   .action(async (name) => {
     const auth = getGlobalAuth();
@@ -338,6 +338,32 @@ program
       console.log(`👉 Switched active profile to: \x1b[32m${name}\x1b[0m\n`);
     } catch (error) {
       console.log(`\n❌ [ERROR] Failed to forge token. ${error.response?.data?.error || error.message}\n`);
+    }
+  });
+
+program
+  .command('list:token')
+  .description('List all active Control Plane tokens for your account')
+  .action(async () => {
+    const auth = getGlobalAuth();
+    if (!auth.token) return console.log('\n❌ [ERROR] Unauthorized. Run `monolith login` first.\n');
+
+    try {
+      const response = await axios.get(`${auth.dashboardUrl}/api/cli/tokens`, {
+        headers: { Authorization: `Bearer ${auth.token}` }
+      });
+
+      console.log(`\n\x1b[1mACTIVE TOKENS\x1b[0m`);
+      console.log(`-----------------------------------------------------`);
+      
+      response.data.tokens.forEach(t => {
+        const date = new Date(t.createdAt).toLocaleDateString();
+        console.log(`\x1b[32m${t.name.padEnd(25)}\x1b[0m | ${t.tokenMasked} | ${date}`);
+      });
+      console.log(`-----------------------------------------------------\n`);
+      
+    } catch (error) {
+      console.log(`\n❌ [ERROR] Failed to fetch tokens. ${error.response?.data?.error || error.message}\n`);
     }
   });
 
