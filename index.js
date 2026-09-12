@@ -115,27 +115,51 @@ const resolveTarget = async (projectId) => {
   }
 };
 
-export async function handleLogin() {
+export async function handleLogin(options) {
+  const dashboardUrl = options?.url || 'http://localhost:3000';
+  
   // 1. Spin up a temporary local server on a random free port (port 0)
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
     
     if (url.pathname === '/callback') {
       const token = url.searchParams.get('token');
+      const user = url.searchParams.get('user') || 'Operator';
       
       if (token) {
-        // 2. Save token to local config (~/.monolith/config.json)
-        const configDir = path.join(os.homedir(), '.monolith');
-        if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
+        // 2. Save token and URL to local config (~/.monolith/auth.json)
+        const globalDir = path.join(os.homedir(), '.monolith');
+        if (!fs.existsSync(globalDir)) fs.mkdirSync(globalDir, { recursive: true });
         
-        fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({ token }, null, 2));
+        const authConfig = {
+          token: token,
+          dashboardUrl: dashboardUrl
+        };
+
+        fs.writeFileSync(
+          path.join(globalDir, 'auth.json'), 
+          JSON.stringify(authConfig, null, 2),
+          { mode: 0o600 } // Secure file permissions
+        );
+
+        const masked = token.length > 8 ? `${token.slice(0, 4)}...${token.slice(-4)}` : '****';
 
         res.writeHead(200, { 'Content-Type': 'text/html' });
-        res.end('<h1>Authentication Successful!</h1><p>You can close this window and return to your terminal.</p>');
-        console.log('\n✨ [SUCCESS]: Monolith CLI authenticated successfully.');
+        res.end(`
+          <div style="background:#09090b; color:#10b981; font-family:monospace; padding:40px; height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center;">
+            <h1 style="text-transform:uppercase; letter-spacing:2px;">Authentication Successful</h1>
+            <p style="color:#a1a1aa;">You can close this window and return to your terminal.</p>
+          </div>
+        `);
+        
+        console.log(`\n✅ Authenticated successfully as: \x1b[32m${user}\x1b[0m`);
+        console.log(`🔑 Token: ${masked}`);
+        console.log(`📡 Connected to Control Plane at: ${dashboardUrl}`);
+        console.log(`🔐 Credentials secured in ${globalDir}/auth.json\n`);
       } else {
         res.writeHead(400, { 'Content-Type': 'text/html' });
-        res.end('<h1>Authentication Failed</h1><p>No token received.</p>');
+        res.end('<h1 style="color:red; font-family:sans-serif;">Authentication Failed. No token received.</h1>');
+        console.log(`\n❌ Authentication failed. Token missing in callback.\n`);
       }
 
       // Close the server and exit process after response
@@ -145,11 +169,12 @@ export async function handleLogin() {
   });
 
   server.listen(0, async () => {
-    const port = (server.address()).port;
-    const authUrl = `https://yourdomain.com/cli/auth?port=${port}`;
+    const port = server.address().port;
+    const authUrl = `${dashboardUrl}/cli/auth?port=${port}`;
 
-    console.log(`\n🚀 Opening browser to authenticate with Monolith...`);
-    console.log(`If your browser does not open automatically, visit: ${authUrl}\n`);
+    console.log(`\n🚀 Initializing loopback authentication...`);
+    console.log(`Opening browser to: ${authUrl}`);
+    console.log(`Waiting for authorization callback...\n`);
 
     // Automatically open the user's default browser
     await open(authUrl);
