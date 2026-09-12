@@ -202,6 +202,36 @@ export async function handleLogin(options) {
   });
 }
 
+// 🛠️ HELPER: Safely read and migrate auth.json to the new Profile structure
+const updateLocalProfile = (profileName, token, dashboardUrl) => {
+  const globalDir = path.join(os.homedir(), '.monolith');
+  const authPath = path.join(globalDir, 'auth.json');
+  
+  let authData = { activeProfile: 'default', profiles: {} };
+
+  if (fs.existsSync(authPath)) {
+    try {
+      authData = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+      // Migrate legacy flat structure on the fly
+      if (authData.token && !authData.profiles) {
+        authData.profiles = { 
+          default: { token: authData.token, dashboardUrl: authData.dashboardUrl } 
+        };
+        authData.activeProfile = 'default';
+        delete authData.token;
+        delete authData.dashboardUrl;
+      }
+    } catch (e) {} // If file is corrupted, start fresh
+  }
+
+  if (!authData.profiles) authData.profiles = {};
+  
+  authData.profiles[profileName] = { token, dashboardUrl };
+  authData.activeProfile = profileName; // Automatically switch to the new profile
+
+  fs.writeFileSync(authPath, JSON.stringify(authData, null, 2), { mode: 0o600 });
+};
+
 program
   .name('monolith')
   .description('Monolith Infrastructure Command Line Interface')
