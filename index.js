@@ -315,6 +315,33 @@ program
   });
 
 program
+  .command('token:generate <name>')
+  .description('Forge a new Personal Access Token and save it as a local profile')
+  .action(async (name) => {
+    const auth = getGlobalAuth();
+    if (!auth.token) return console.log('\n❌ [ERROR] Unauthorized. Run `monolith login` first.\n');
+
+    try {
+      console.log(`\nForging new token for profile: \x1b[32m${name}\x1b[0m...`);
+      
+      const response = await axios.post(`${auth.dashboardUrl}/api/cli/tokens`, 
+        { name }, 
+        { headers: { Authorization: `Bearer ${auth.token}` } }
+      );
+
+      const newToken = response.data.token;
+      
+      // Save it locally and switch to it
+      updateLocalProfile(name, newToken, auth.dashboardUrl);
+
+      console.log(`✅ Token successfully forged and secured.`);
+      console.log(`👉 Switched active profile to: \x1b[32m${name}\x1b[0m\n`);
+    } catch (error) {
+      console.log(`\n❌ [ERROR] Failed to forge token. ${error.response?.data?.error || error.message}\n`);
+    }
+  });
+
+program
   .command('env:set')
   .description('Interactively securely inject an environment variable into the remote vault')
   .action(async () => {
