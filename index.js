@@ -267,38 +267,54 @@ program
     const server = http.createServer(async (req, res) => {
       const reqUrl = new URL(req.url, `http://localhost`);
       
-      if (reqUrl.pathname === '/callback') {
-        const token = reqUrl.searchParams.get('token');
-        const user = reqUrl.searchParams.get('user') || 'Operator';
+     if (reqUrl.pathname === '/callback') {
+        const payloadStr = reqUrl.searchParams.get('payload');
         
-        if (token) {
-          const authConfig = { token, dashboardUrl: options.url };
+        if (payloadStr) {
+          const payload = JSON.parse(decodeURIComponent(payloadStr));
+          
+          let compiledProfiles = {};
+          
+          // Inject EVERY token into the local system
+          payload.tokens.forEach(t => {
+            compiledProfiles[t.name] = { 
+              token: t.token, 
+              dashboardUrl: options.url 
+            };
+          });
+
+          const authConfig = {
+            activeProfile: payload.default,
+            profiles: compiledProfiles
+          };
+
           fs.writeFileSync(path.join(globalDir, 'auth.json'), JSON.stringify(authConfig, null, 2), { mode: 0o600 });
           
-          const masked = token.length > 8 ? `${token.slice(0, 4)}...${token.slice(-4)}` : '****';
-
-          // Success screen for the browser
-          res.writeHead(200, { 'Content-Type': 'text/html' });
-          res.end(`
-            <div style="background:#09090b; color:#10b981; font-family:monospace; padding:40px; height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center;">
-              <h1 style="text-transform:uppercase; letter-spacing:2px;">Authentication Successful</h1>
-              <p style="color:#a1a1aa;">You can close this window and return to your terminal.</p>
-            </div>
-          `);
-
           // Terminal Output
-          console.log(`\n✅ Authenticated successfully as: \x1b[32m${user}\x1b[0m`);
-          console.log(`🔑 Token: ${masked}`);
-          console.log(`📡 Connected to Control Plane at: ${options.url}`);
+          console.log(`\n✅ Authenticated successfully as: \x1b[32m${payload.user}\x1b[0m`);
+          console.log(`📥 Synced \x1b[33m${payload.tokens.length}\x1b[0m profiles from Control Plane.`);
+          console.log(`👉 Default profile set to: \x1b[32m${payload.default}\x1b[0m`);
           console.log(`🔐 Credentials secured in ${globalDir}/auth.json\n`);
+
         } else {
           res.writeHead(400, { 'Content-Type': 'text/html' });
           res.end('<h1 style="color:red; font-family:sans-serif;">Authentication Failed. No token received.</h1>');
           console.log(`\n❌ Authentication failed. Token missing in callback.\n`);
         }
 
-        server.close();
-        process.exit(0);
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end(`
+            <div style="background:#09090b; color:#10b981; font-family:monospace; padding:40px; height:100vh; display:flex; flex-direction:column; justify-content:center; align-items:center;">
+              <h1 style="text-transform:uppercase; letter-spacing:2px;">Authentication Successful</h1>
+              <p style="color:#a1a1aa;">You can close this window and return to your terminal.</p>
+            </div>
+          `, () => {
+            // Wait 500ms so the browser actually receives the HTML before we kill the server
+            setTimeout(() => {
+              server.close();
+              process.exit(0);
+            }, 500);
+          });
       }
     });
 
@@ -404,6 +420,7 @@ program
       console.log(`\n✅ Active profile switched to: \x1b[32m${selectedProfile}\x1b[0m\n`);
     } catch (error) {
       console.log(`\n❌ [ERROR] Failed to switch profile.\n`);
+      console.log(error.message || error);
     }
   });
 

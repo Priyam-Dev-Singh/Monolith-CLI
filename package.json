@@ -2,6 +2,7 @@
   "name": "monolith-engine",
   "version": "1.1.1",
   "description": "Command line deployment tool",
+  "type": "module",
   "main": "index.js",
   "bin": {
     "monolith": "./index.js"
@@ -18,6 +19,7 @@
     "commander": "^15.0.0",
     "dotenv": "^17.4.2",
     "form-data": "^4.0.6",
+    "inquirer": "^14.2.2",
     "open": "^11.0.3",
     "ora": "^5.4.1"
   }
