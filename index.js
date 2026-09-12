@@ -368,6 +368,29 @@ program
   });
 
 program
+  .command('switch <profile>')
+  .description('Switch your active local profile')
+  .action((profile) => {
+    const authPath = path.join(os.homedir(), '.monolith', 'auth.json');
+    if (!fs.existsSync(authPath)) return console.log('\n❌ [ERROR] No configuration found. Run `monolith login`.\n');
+
+    try {
+      const authData = JSON.parse(fs.readFileSync(authPath, 'utf8'));
+      
+      if (!authData.profiles || !authData.profiles[profile]) {
+        return console.log(`\n❌ [ERROR] Profile '\x1b[31m${profile}\x1b[0m' not found on this machine.\n`);
+      }
+
+      authData.activeProfile = profile;
+      fs.writeFileSync(authPath, JSON.stringify(authData, null, 2), { mode: 0o600 });
+      
+      console.log(`\n✅ Active profile switched to: \x1b[32m${profile}\x1b[0m\n`);
+    } catch (error) {
+      console.log(`\n❌ [ERROR] Failed to switch profile.\n`);
+    }
+  });
+
+program
   .command('env:set')
   .description('Interactively securely inject an environment variable into the remote vault')
   .action(async () => {
