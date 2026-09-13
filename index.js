@@ -1626,19 +1626,19 @@ program
     const red     = (s) => esc(31, s);
     const magenta = (s) => esc(35, s);
     const blue    = (s) => esc(94, s);
- 
+
     const isTTY = Boolean(process.stdout.isTTY);
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const WIDTH = 68;
     const rule = (color = gray) => color('─'.repeat(WIDTH));
- 
+
     // Typewriter effect — degrades to instant print when piped/non-interactive
     async function typeLine(text, delay = 5) {
       if (!isTTY) { console.log(text); return; }
       for (const ch of text) { process.stdout.write(ch); await sleep(delay); }
       process.stdout.write('\n');
     }
- 
+
     // ================= BOOT ANIMATION =================
     const asciiArt = [
       '███╗   ███╗ ██████╗ ███╗   ██╗ ██████╗ ██╗     ██╗████████╗██╗  ██╗',
@@ -1649,23 +1649,23 @@ program
       '╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═══╝ ╚═════╝ ╚══════╝╚═╝   ╚═╝   ╚═╝  ╚═╝',
     ];
     const gradient = [cyan, cyan, blue, blue, magenta, magenta]; // vertical gradient
- 
+
     console.log('');
     for (let i = 0; i < asciiArt.length; i++) {
       console.log(gradient[i](asciiArt[i]));
       if (isTTY) await sleep(30);
     }
     console.log('');
-    await typeLine('  ' + bold('YOUR SERVER. NO MIDDLEMEN.') + '   ' + dim('v1.0.0'), 4);
+    await typeLine('  ' + bold('YOUR SERVER. NO MIDDLEMEN.') + '   ' + dim('v1.1.0'), 4);
     console.log(rule());
- 
+
     const bootSpinner = ora({ text: dim('Compiling guide modules...'), color: 'cyan' }).start();
     await sleep(isTTY ? 450 : 0);
     bootSpinner.succeed(dim('Guide modules loaded.'));
- 
+
     // ================= STEP 0: ACCOUNT + PAT (the part people always ask about) =================
     console.log('\n' + rule());
-    console.log('\n  ' + bold(yellow('🔑 BEFORE YOU START — GET YOUR PERSONAL ACCESS TOKEN')) + '\n');
+    console.log('\n  ' + bold(yellow('🔑 BEFORE YOU START — GET AUTHENTICATED')) + '\n');
     const patSteps = [
       ['1.', 'Open your Monolith Web Dashboard in a browser and log in (or create an account).'],
       ['2.', 'Go to Account / Settings → Personal Access Tokens → Generate New Token.'],
@@ -1677,13 +1677,26 @@ program
     }
     console.log(`\n      ${cyan('$ monolith login --token <YOUR_PAT> --url <YOUR_DASHBOARD_URL>')}`);
     console.log(`      ${gray("(--url defaults to http://localhost:3000 if you don't pass it)")}`);
-    console.log(`\n  ${dim('Your PAT + dashboard URL are saved locally to')} ${cyan('~/.monolith/auth.json')} ${dim('(mode 0600).')}`);
+    console.log(`\n  ${dim('Prefer a browser? Run')} ${cyan('$ monolith login')} ${dim('with no flags — it opens a loopback')}`);
+    console.log(`  ${dim('OAuth tab and syncs')} ${bold(dim('every'))} ${dim('token/profile on your account in one shot, then activates')}`);
+    console.log(`  ${dim('whichever one the Dashboard marks as default.')}`);
+    console.log(`\n  ${dim('Either way, credentials are saved locally to')} ${cyan('~/.monolith/auth.json')} ${dim('(mode 0600).')}`);
     console.log(`  ${dim('Every other command reads that file automatically — you only log in once per machine.')}`);
- 
+
+    // ================= STEP 0.5: MULTI-WORKSPACE / PROFILES (new since last guide revision) =================
+    console.log('\n' + rule());
+    console.log('\n  ' + bold(yellow('🗂️  MANAGING MULTIPLE PROFILES')) + '\n');
+    console.log(`  ${gray('Auth is now profile-based — one machine can hold several tokens (e.g. one per')}`);
+    console.log(`  ${gray('workspace, client, or environment) and switch between them without re-logging in.')}\n`);
+    console.log(`      ${cyan('$ monolith generate:token <name>')}   ${gray('Forge a brand-new PAT, save it as <name>, activate it')}`);
+    console.log(`      ${cyan('$ monolith list:token')}              ${gray('See every token on your account (masked)')}`);
+    console.log(`      ${cyan('$ monolith switch')}                  ${gray('Interactively pick which saved profile is active')}`);
+    console.log(`\n  ${dim('Every command below always runs against whichever profile is currently active.')}`);
+
     // ================= THE PIPELINE =================
     console.log('\n' + rule());
     console.log('\n  ' + bold(yellow('⚡ THE PIPELINE')) + '\n');
- 
+
     const circled = ['①', '②', '③', '④', '⑤'];
     function step(i, title, tag, cmd, desc, isLast) {
       const label = tag ? `${title}  ${dim('(' + tag + ')')}` : title;
@@ -1695,7 +1708,7 @@ program
         console.log(gray('      ▼'));
       }
     }
- 
+
     step(1, 'REGISTER HARDWARE', 'once per server', 'monolith server:add',
       'Tells Monolith about a server you own — name, public IP, and its agent key');
     step(2, 'SETUP', null, 'monolith init <project-name>',
@@ -1704,28 +1717,57 @@ program
       'Spins up Postgres / MySQL / Mongo / Redis, auto-linked to your vault');
     step(4, 'SECRETS', 'optional', 'monolith env:set',
       'Encrypts and stores an environment variable on the tethered server');
- 
+
     console.log(`  ${yellow(circled[4])}  ${bold('DEPLOY')}`);
     console.log(`      ${gray('├─')} ${green('Manual')}      ${cyan('$ monolith deploy')}`);
     console.log(`      ${gray('│')}                 ${gray('Pack & ship on demand, whenever you want')}`);
     console.log(`      ${gray('└─')} ${green('Automatic')}   ${cyan('$ monolith github:connect')}`);
     console.log(`      ${' '.repeat(17)}${gray('Deploys automatically on every `git push`')}`);
- 
+
+    console.log(`\n  ${dim('Already have data sitting on Supabase, Atlas, or another provider?')}`);
+    console.log(`      ${cyan('$ monolith db:migrate')}   ${gray('Move it into a db:create\'d database, live-streamed')}`);
+
     console.log('\n' + rule());
- 
+
     // ================= COMMAND DATA (grounded in what the CLI actually does) =================
     const SECTIONS = [
       {
         title: 'ACCOUNT & AUTH',
         cmds: [
           {
-            cmd: 'login', usage: 'monolith login --token <PAT> [--url <dashboardUrl>]',
-            desc: 'Authenticates this machine with your Monolith account using the PAT from the web dashboard. Writes ~/.monolith/auth.json.',
+            cmd: 'login', usage: 'monolith login [--token <PAT>] [--url <dashboardUrl>]',
+            desc: 'Authenticates this machine with your Monolith account. With --token, writes a single profile directly. With no flags, opens a browser loopback flow that syncs every token on your account as a named profile and activates the Dashboard-designated default.',
             why: [
-              "--token wasn't provided — it's a required flag, there's no interactive fallback for it.",
-              'The PAT was pasted with extra whitespace or a trailing newline.',
-              "--url points at the wrong dashboard (silently defaults to http://localhost:3000 if you omit it).",
+              "Manual mode (--token) has no interactive fallback — omit it and the browser flow runs instead, which needs a GUI/browser to open.",
+              "--url silently defaults to http://localhost:3000 if omitted — easy to authenticate against the wrong dashboard without noticing.",
+              "Browser flow: the loopback server's /callback never receives a payload (closed tab, blocked popup, network hiccup) — it prints 'Token missing in callback' and exits.",
+              "Browser flow on a headless/SSH session: `open()` can't launch a browser — use `--token` instead.",
               "No write permission to your home directory, so ~/.monolith/auth.json can't be created.",
+            ],
+          },
+          {
+            cmd: 'generate:token', usage: 'monolith generate:token <name>',
+            desc: "Asks the Control Plane to forge a brand-new PAT under <name>, then saves it locally as a profile and immediately switches to it — you don't touch the Dashboard for this one.",
+            why: [
+              'Not logged in yet (no active profile with a token) — run `monolith login` first.',
+              'A local profile with that <name> already exists — it gets silently overwritten with the new token, no confirmation prompt.',
+              'The Dashboard call fails (network, auth expired) — nothing is written locally if the request itself errors.',
+            ],
+          },
+          {
+            cmd: 'list:token', usage: 'monolith list:token',
+            desc: "Lists every Control Plane token registered to your account (masked), with creation date — this is account-wide, not just tokens saved on this machine.",
+            why: [
+              'Not logged in — needs a valid Authorization header from the active profile.',
+              "A token appears here but has no matching local profile — it exists on your account but was never pulled down with `login` or `generate:token` on this machine.",
+            ],
+          },
+          {
+            cmd: 'switch', usage: 'monolith switch',
+            desc: 'Interactive picker (arrow keys) over every profile saved in ~/.monolith/auth.json — sets whichever you pick as active for all subsequent commands.',
+            why: [
+              "No profiles saved yet — if you've only ever used the very old flat auth.json format and never run `login` since the profile migration, this can report 'No profiles found' even though a token technically exists. Run `login` or `generate:token` once to migrate it.",
+              '~/.monolith/auth.json is missing entirely — run `monolith login` first.',
             ],
           },
           {
@@ -1755,23 +1797,26 @@ program
           },
           {
             cmd: 'init', usage: 'monolith init <project-name>',
-            desc: 'Creates a new project, registers it with the Control Plane, and lets you tether it to one of your BYOC servers.',
+            desc: 'Creates a new project, registers it with the Control Plane, lets you tether it to a BYOC server, then scans package.json and offers to auto-wire known build tooling (Prisma, patch-package, Puppeteer) into a postinstall script — generating nixpacks.toml when a tool needs a specific folder preserved in the Docker build cache.',
             why: [
               'Project name has characters outside [A-Za-z0-9_-] — spaces and slashes are rejected.',
               'A .monolith/project.json already exists in this folder from a previous init.',
               'Not logged in — the Control Plane sync fails immediately without a token.',
               'No servers registered yet: init still succeeds, but the project stays untethered until you attach hardware.',
-              "If you entered a build directory, that folder doesn't actually exist relative to where you ran the command.",
+              "The entered build directory doesn't actually exist relative to where you ran the command — init aborts immediately, nothing is written.",
+              'The tooling auto-detect step only fires if package.json exists in the resolved build directory — no package.json means it silently skips straight past those prompts.',
+              "Answering anything other than 'n' to a detected-tool prompt adds its command to postinstall — easy to accidentally accept a tool you don't actually want wired into the build.",
             ],
           },
           {
             cmd: 'db:create', usage: 'monolith db:create <db-name>',
-            desc: "Provisions Postgres / MySQL / Redis / MongoDB on the project's tethered server and auto-injects the connection string into the vault.",
+            desc: "Prompts you to pick an engine (Postgres / MySQL / Redis / MongoDB), provisions it on the project's tethered server, and auto-injects the connection string into the vault as DATABASE_URL / REDIS_URL / MONGO_URI depending on engine.",
             why: [
               'Project is untethered — no target server assigned, so there is nothing to provision on.',
               "The tethered server is offline, or Docker isn't running on it.",
               'A database with that name is already using the required port on that node.',
               'Provisioning succeeded but auto-linking to the vault failed — the connection string prints so you can add it manually with `env:set`.',
+              'No engine number entered (or an invalid one) — silently falls back to Postgres rather than erroring.',
             ],
           },
           {
@@ -1790,10 +1835,11 @@ program
         cmds: [
           {
             cmd: 'env:set', usage: 'monolith env:set',
-            desc: 'Interactively encrypts and stores one KEY=VALUE pair in the remote vault on your tethered server.',
+            desc: 'Interactively encrypts and stores one KEY=VALUE pair in the remote vault on your tethered server. The key is auto-normalized to UPPERCASE_WITH_UNDERSCORES.',
             why: [
               'Not run from inside a project folder — no .monolith/project.json found.',
               'The tethered server is unreachable.',
+              "You typed a lowercase or spaced key expecting it verbatim — it's silently rewritten (e.g. 'api key' becomes API_KEY).",
               "The value doesn't take effect until you redeploy — the running container won't pick it up automatically.",
             ],
           },
@@ -1808,11 +1854,28 @@ program
         ],
       },
       {
+        title: 'DATA MIGRATION',
+        cmds: [
+          {
+            cmd: 'db:migrate', usage: 'monolith db:migrate',
+            desc: "Detects databases already attached to this project, walks you through picking a destination, then hidden-prompts for a source URI (Supabase/Atlas/etc.) and the destination's Monolith URI, and runs the migration on a short-lived ephemeral worker on the tethered server — auto-attaching to that worker's live log stream the moment it kicks off.",
+            why: [
+              "No databases attached yet — run `monolith db:create <db-name>` first, this command refuses to run against nothing.",
+              'The tethered server is unreachable during the initial database-detection scan, before you even get prompted for credentials.',
+              'Either the source or destination URI is left blank at the hidden prompt — both are strictly required, migration aborts.',
+              "Pasted a direct Supabase URL instead of the Connection Pooler URL — Monolith detects the raw '.supabase.co' host, refuses to proceed, and tells you to grab the IPv4 pooler URL (port 5432) from Supabase's dashboard instead.",
+              'Postgres is the only engine this is built against today — running it against a non-Postgres destination is untested territory.',
+              'The live telemetry stream after a successful trigger only shows what the ephemeral worker logs — closing the terminal (Ctrl+C) disconnects the stream but does not stop the migration itself.',
+            ],
+          },
+        ],
+      },
+      {
         title: 'DEPLOYMENT',
         cmds: [
           {
             cmd: 'deploy', usage: 'monolith deploy',
-            desc: 'Zips the project directory, uploads it to the tethered server, and runs a health-checked blue/green traffic switch.',
+            desc: 'Zips the project directory (respecting a configured build subdirectory from monolith.json, if any), uploads it to the tethered server, and runs a health-checked blue/green traffic switch.',
             why: [
               'Project is untethered — no target hardware assigned.',
               'Target node is down or unreachable (ECONNREFUSED/ETIMEDOUT) — the agent may not be running on port 4000.',
@@ -1894,12 +1957,12 @@ program
         ],
       },
     ];
- 
+
     // Flatten for numbered lookup
     const FLAT = [];
     SECTIONS.forEach((section) => section.cmds.forEach((c) => FLAT.push(c)));
     FLAT.forEach((c, i) => { c._n = i + 1; });
- 
+
     // ================= MENU RENDERING =================
     function printMenu() {
       console.log('\n  ' + bold(yellow('📖 COMMAND REFERENCE')) + '   ' + dim('(type a number to expand)'));
@@ -1915,7 +1978,7 @@ program
       console.log('\n' + rule());
       console.log(`  ${gray('Type a')} ${bold('number')} ${gray('to expand a command  ·  ')}${bold('a')}${gray(' = expand all  ·  ')}${bold('m')}${gray(' = redraw menu  ·  ')}${bold('q')}${gray(' = quit guide')}`);
     }
- 
+
     function printCard(c) {
       console.log('\n  ' + rule(cyan));
       console.log(`  ${bold(cyan('▶ ' + c.cmd))}`);
@@ -1927,17 +1990,17 @@ program
       });
       console.log('  ' + rule(cyan));
     }
- 
+
     printMenu();
- 
+
     // ================= INTERACTIVE EXPANDER LOOP =================
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const ask = (q) => new Promise((resolve) => rl.question(q, resolve));
- 
+
     let browsing = true;
     while (browsing) {
       const raw = (await ask(`\n  ${bold('guide>')} `)).trim().toLowerCase();
- 
+
       if (raw === 'q' || raw === 'quit' || raw === 'exit') {
         browsing = false;
         break;
@@ -1959,11 +2022,11 @@ program
       // fallback: fuzzy match by command name
       const byName = FLAT.find((c) => c.cmd.toLowerCase().includes(raw));
       if (raw && byName) { printCard(byName); continue; }
- 
+
       console.log(gray("  Not recognized. Type a number, a command name, 'a', 'm', or 'q'."));
     }
     rl.close();
- 
+
     console.log('\n' + rule());
     console.log('\n  ' + bold(`Let's deploy your dream project.`) + '\n');
   });
